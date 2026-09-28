@@ -249,36 +249,41 @@ if [ "$NON_INTERACTIVE" = false ] && [ -c /dev/tty ]; then
     fi
 
     echo ""
-    echo "[3/4] Keyboard Layout:"
-    echo "  Enter XKB layout(s), comma-separated. Examples:"
-    echo "    us          - US English only"
-    echo "    us,ua       - US + Ukrainian (switch with Alt+Shift by default)"
-    echo "    us,ru       - US + Russian"
-    echo "    us,de       - US + German"
+    echo "[3/4] Keyboard Input Mode:"
+    echo "  1) Universal Client-Sync (Recommended, Webtop-style)"
+    echo "     -> Types seamlessly in ANY client language/layout (US, Ukrainian, German, etc.)"
+    echo "        via Selkies dynamic keysym engine without manual layout switching."
+    echo "  2) Custom Guest XKB Layouts"
+    echo "     -> Configure specific server-side XKB layouts and manual shortcut toggle."
     echo ""
-    read -r -p "Layout(s) (default: ${KEYBOARD_LAYOUTS}): " input_kbdl < /dev/tty || input_kbdl=""
-    [ -n "$input_kbdl" ] && KEYBOARD_LAYOUTS="$input_kbdl"
-
-    # If multiple layouts, ask for switch shortcut
-    if [[ "$KEYBOARD_LAYOUTS" == *","* ]]; then
-        echo ""
-        echo "  Switch shortcut options:"
-        echo "    1) Alt+Shift   (grp:alt_shift_toggle) [Default]"
-        echo "    2) Ctrl+Shift  (grp:ctrl_shift_toggle)"
-        echo "    3) Super+Space (grp:win_space_toggle)"
-        echo "    4) CapsLock    (grp:caps_toggle)"
-        echo "    5) Custom (enter manually)"
-        echo ""
-        read -r -p "Shortcut choice [1-5] (default: 1): " kbdopt < /dev/tty || kbdopt="1"
-        case "$kbdopt" in
-            2) KEYBOARD_OPTIONS="grp:ctrl_shift_toggle" ;;
-            3) KEYBOARD_OPTIONS="grp:win_space_toggle" ;;
-            4) KEYBOARD_OPTIONS="grp:caps_toggle" ;;
-            5)
-                read -r -p "Enter XKB option string: " KEYBOARD_OPTIONS < /dev/tty || KEYBOARD_OPTIONS=""
-                ;;
-            *) KEYBOARD_OPTIONS="grp:alt_shift_toggle" ;;
-        esac
+    read -r -p "Select choice [1-2] (default: 1): " choice_kbd < /dev/tty || choice_kbd="1"
+    if [ "$choice_kbd" = "2" ]; then
+        read -r -p "Enter XKB layout(s), comma-separated (e.g. us,ua): " input_kbdl < /dev/tty || input_kbdl="us"
+        KEYBOARD_LAYOUTS="${input_kbdl:-us}"
+        if [[ "$KEYBOARD_LAYOUTS" == *","* ]]; then
+            echo ""
+            echo "  Switch shortcut options:"
+            echo "    1) Alt+Shift   (grp:alt_shift_toggle) [Default]"
+            echo "    2) Ctrl+Shift  (grp:ctrl_shift_toggle)"
+            echo "    3) Super+Space (grp:win_space_toggle)"
+            echo "    4) CapsLock    (grp:caps_toggle)"
+            echo "    5) Custom (enter manually)"
+            echo ""
+            read -r -p "Shortcut choice [1-5] (default: 1): " kbdopt < /dev/tty || kbdopt="1"
+            case "$kbdopt" in
+                2) KEYBOARD_OPTIONS="grp:ctrl_shift_toggle" ;;
+                3) KEYBOARD_OPTIONS="grp:win_space_toggle" ;;
+                4) KEYBOARD_OPTIONS="grp:caps_toggle" ;;
+                5)
+                    read -r -p "Enter XKB option string: " KEYBOARD_OPTIONS < /dev/tty || KEYBOARD_OPTIONS=""
+                    ;;
+                *) KEYBOARD_OPTIONS="grp:alt_shift_toggle" ;;
+            esac
+        fi
+    else
+        KEYBOARD_LAYOUTS="us"
+        KEYBOARD_VARIANTS=""
+        KEYBOARD_OPTIONS=""
     fi
 
     echo ""
@@ -329,7 +334,7 @@ case "$DISTRO" in
             dbus dbus-tools dbus-x11 sudo procps-ng psmisc iproute net-tools curl tar libcap
             python3-dnf-plugin-versionlock libdnf5-plugin-actions NetworkManager openssh-server
             pipewire pipewire-pulse pipewire-utils wireplumber pulseaudio-utils
-            xorg-x11-server-Xvfb xrandr xrdb
+            xorg-x11-server-Xvfb xrandr xrdb libxkbcommon wl-clipboard
             kwin kwin-x11 breeze-icon-theme konsole plasma-desktop plasma-workspace plasma-workspace-x11
             dolphin plasma-systemsettings plasma-pa plasma-nm kwrite ark gwenview spectacle kdialog
         )
@@ -350,7 +355,7 @@ case "$DISTRO" in
             systemd libpam-systemd dbus dbus-x11 sudo procps psmisc iproute2 net-tools curl tar libcap2-bin
             openssh-server network-manager
             pipewire pipewire-pulse wireplumber pulseaudio-utils
-            xvfb x11-xserver-utils x11-utils
+            xvfb x11-xserver-utils x11-utils libxkbcommon0 wl-clipboard
             kwin-wayland kwin-x11 breeze-icon-theme konsole plasma-desktop plasma-workspace
             dolphin systemsettings plasma-pa plasma-nm kwrite ark gwenview kde-spectacle kdialog
         )
@@ -367,7 +372,7 @@ case "$DISTRO" in
             systemd dbus sudo procps-ng psmisc iproute2 net-tools curl tar libcap
             openssh networkmanager
             pipewire pipewire-pulse wireplumber libpulse
-            xorg-server-xvfb xorg-xrandr xorg-xrdb
+            xorg-server-xvfb xorg-xrandr xorg-xrdb libxkbcommon wl-clipboard
             kwin kwin-x11 breeze-icons konsole plasma-desktop plasma-workspace
             dolphin systemsettings plasma-pa plasma-nm kwrite ark gwenview spectacle kdialog
         )
@@ -496,28 +501,56 @@ for unit in pipewire.service pipewire-pulse.service wireplumber.service; do
 done
 chown -R "${USER_ID}:${USER_GROUP}" "${USER_HOME}/.config"
 
-# Write KDE keyboard layout config (kxkbrc) — KWin reads this on Wayland
-echo "Configuring keyboard layout (${KEYBOARD_LAYOUTS})..."
-mkdir -p "${USER_HOME}/.config"
-{
-    echo "[Layout]"
-    echo "LayoutList=${KEYBOARD_LAYOUTS}"
-    echo "Model=pc105"
-    if [ -n "${KEYBOARD_VARIANTS}" ]; then
-        echo "VariantList=${KEYBOARD_VARIANTS}"
-    fi
-    if [ -n "${KEYBOARD_OPTIONS}" ]; then
-        echo "Options=${KEYBOARD_OPTIONS}"
-        echo "ResetOldOptions=true"
-    fi
-    echo "Use=true"
-} > "${USER_HOME}/.config/kxkbrc"
-chown "${USER_ID}:${USER_GROUP}" "${USER_HOME}/.config/kxkbrc"
+# Setup KWin helper rules for seamless clipboard/input injection
+if [ ! -f "${USER_HOME}/.config/kwinrulesrc" ]; then
+    cat << 'EOF' > "${USER_HOME}/.config/kwinrulesrc"
+[General]
+count=1
+rules=1
 
-# Persist XKB layout system-wide (for localectl / X11 fallback)
-PRIMARY_LAYOUT="${KEYBOARD_LAYOUTS%%,*}"
-if command -v localectl &>/dev/null && pidof systemd &>/dev/null; then
-    localectl set-x11-keymap "${PRIMARY_LAYOUT}" pc105 "${KEYBOARD_VARIANTS%%,*}" "${KEYBOARD_OPTIONS}" 2>/dev/null || true
+[1]
+Description=wl-clipboard support
+fsplevel=3
+fsplevelrule=2
+noborder=true
+noborderrule=2
+skipswitcher=true
+skipswitcherrule=2
+skiptaskbar=true
+skiptaskbarrule=2
+wmclass=wl-(copy|paste)
+wmclassmatch=3
+EOF
+    chown "${USER_ID}:${USER_GROUP}" "${USER_HOME}/.config/kwinrulesrc"
+fi
+
+# Configure keyboard layout (Universal client-sync or custom XKB)
+mkdir -p "${USER_HOME}/.config"
+if [ "${KEYBOARD_LAYOUTS}" != "us" ]; then
+    echo "Configuring custom guest keyboard layout (${KEYBOARD_LAYOUTS})..."
+    {
+        echo "[Layout]"
+        echo "LayoutList=${KEYBOARD_LAYOUTS}"
+        echo "Model=pc105"
+        if [ -n "${KEYBOARD_VARIANTS}" ]; then
+            echo "VariantList=${KEYBOARD_VARIANTS}"
+        fi
+        if [ -n "${KEYBOARD_OPTIONS}" ]; then
+            echo "Options=${KEYBOARD_OPTIONS}"
+            echo "ResetOldOptions=true"
+        fi
+        echo "Use=true"
+    } > "${USER_HOME}/.config/kxkbrc"
+    chown "${USER_ID}:${USER_GROUP}" "${USER_HOME}/.config/kxkbrc"
+
+    # Persist XKB layout system-wide (for localectl / X11 fallback)
+    PRIMARY_LAYOUT="${KEYBOARD_LAYOUTS%%,*}"
+    if command -v localectl &>/dev/null && pidof systemd &>/dev/null; then
+        localectl set-x11-keymap "${PRIMARY_LAYOUT}" pc105 "${KEYBOARD_VARIANTS%%,*}" "${KEYBOARD_OPTIONS}" 2>/dev/null || true
+    fi
+else
+    echo "Universal keyboard mode enabled: client layouts handled dynamically via Selkies."
+    rm -f "${USER_HOME}/.config/kxkbrc"
 fi
 
 # Disable fwupd service in headless/container environments (crashes without EFI/hardware access)
