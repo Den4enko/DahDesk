@@ -586,24 +586,17 @@ setcap -r /usr/bin/kwin_wayland 2>/dev/null || setcap -r /usr/sbin/kwin_wayland 
 REPO_URL="${SELKIES_REPO_URL:-https://raw.githubusercontent.com/Den4enko/DahDesk/main}"
 TMP_DIR=$(mktemp -d)
 
-if curl -fsSL --max-time 4 "${REPO_URL}/systemd/start-selkies.sh" -o "${TMP_DIR}/start-selkies.sh" 2>/dev/null; then
+if curl -fsSL --max-time 2 "${REPO_URL}/systemd/start-selkies.sh" -o "${TMP_DIR}/start-selkies.sh" 2>/dev/null; then
     if [ -s "${TMP_DIR}/start-selkies.sh" ] && ! cmp -s "${TMP_DIR}/start-selkies.sh" /usr/local/bin/start-selkies.sh 2>/dev/null; then
-        echo "[selkies] Updated start-selkies.sh from repository."
+        echo "[selkies] Updated start-selkies.sh from repository (takes effect on next session restart)."
         cp "${TMP_DIR}/start-selkies.sh" /usr/local/bin/start-selkies.sh
         chmod +x /usr/local/bin/start-selkies.sh
     fi
 fi
 
-
 rm -rf "${TMP_DIR}"
 
-# Restart service if currently running
-if pidof systemd &>/dev/null && systemctl is-active --quiet selkies 2>/dev/null; then
-    echo "[selkies] Reloading Selkies desktop service..."
-    systemctl restart selkies 2>/dev/null || true
-fi
-
-echo "[selkies] Desktop environment is up to date."
+echo "[selkies] Post-transaction checks completed."
 EOF
 chmod +x /usr/local/bin/selkies-sync
 
