@@ -201,10 +201,17 @@ if [ "$NON_INTERACTIVE" = false ] && [ -c /dev/tty ]; then
             echo "Selected existing user: ${DESKTOP_USER}"
             read -r -p "Change Linux password for '${DESKTOP_USER}'? [y/N]: " change_pass < /dev/tty || change_pass="n"
             if [[ "$change_pass" =~ ^[yY] ]]; then
-                read -r -p "Enter new password for ${DESKTOP_USER}: " input_pass < /dev/tty || input_pass=""
+                read -s -r -p "Enter new password for ${DESKTOP_USER}: " input_pass < /dev/tty || input_pass=""
+                echo ""
                 if [ -n "$input_pass" ]; then
-                    DESKTOP_PASS="$input_pass"
-                    SET_PASSWORD=true
+                    read -s -r -p "Confirm new password for ${DESKTOP_USER}: " confirm_pass < /dev/tty || confirm_pass=""
+                    echo ""
+                    if [ "$input_pass" = "$confirm_pass" ]; then
+                        DESKTOP_PASS="$input_pass"
+                        SET_PASSWORD=true
+                    else
+                        echo "Passwords do not match. Password was not changed."
+                    fi
                 fi
             fi
         else
@@ -218,7 +225,8 @@ if [ "$NON_INTERACTIVE" = false ] && [ -c /dev/tty ]; then
                     echo "Invalid username. Must start with a letter/underscore and contain [a-z0-9_-]."
                 fi
             done
-            read -r -p "Enter password for ${DESKTOP_USER} (default: ${DESKTOP_USER}): " input_pass < /dev/tty || input_pass=""
+            read -s -r -p "Enter password for ${DESKTOP_USER} (default: ${DESKTOP_USER}): " input_pass < /dev/tty || input_pass=""
+            echo ""
             DESKTOP_PASS="${input_pass:-$DESKTOP_USER}"
             SET_PASSWORD=true
         fi
@@ -234,7 +242,8 @@ if [ "$NON_INTERACTIVE" = false ] && [ -c /dev/tty ]; then
                 echo "Invalid username. Must start with a letter/underscore and contain [a-z0-9_-]."
             fi
         done
-        read -r -p "Enter password for ${DESKTOP_USER} (default: ${DESKTOP_USER}): " input_pass < /dev/tty || input_pass=""
+        read -s -r -p "Enter password for ${DESKTOP_USER} (default: ${DESKTOP_USER}): " input_pass < /dev/tty || input_pass=""
+        echo ""
         DESKTOP_PASS="${input_pass:-$DESKTOP_USER}"
         SET_PASSWORD=true
     fi
@@ -710,8 +719,8 @@ echo "Profile:      ${PROFILE}"
 echo "Backend:      ${INITIAL_BACKEND}"
 echo "Web URL:      https://<server-ip>:${PORT}/"
 echo "Desktop User: ${DESKTOP_USER}"
-if [ "$SET_PASSWORD" = true ] && [ -n "$DESKTOP_PASS" ]; then
-    echo "Linux Pass:   ${DESKTOP_PASS}"
+if [ "$SET_PASSWORD" = true ]; then
+    echo "Linux Pass:   [Configured - Hidden]"
 fi
 echo "HTTP Auth:    None (Direct Stream Access)"
 echo "Updater:      sudo selkies-update"
