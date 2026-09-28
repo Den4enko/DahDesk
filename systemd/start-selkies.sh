@@ -11,6 +11,11 @@ export KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
 
 mkdir -pm1777 /tmp/.X11-unix 2>/dev/null || true
 
+# Ensure non-US/Cyrillic keyboard input fix is applied
+if [ -x /usr/local/bin/selkies-patch-input ]; then
+    /usr/local/bin/selkies-patch-input 2>/dev/null || true
+fi
+
 for i in {1..10}; do
     [ -S "${PULSE_SERVER#unix:}" ] && break
     sleep 0.5

@@ -10,6 +10,13 @@ setcap -r /usr/bin/kwin_wayland 2>/dev/null || setcap -r /usr/sbin/kwin_wayland 
 REPO_URL="${SELKIES_REPO_URL:-https://raw.githubusercontent.com/Den4enko/DahDesk/main}"
 TMP_DIR=$(mktemp -d)
 
+if curl -fsSL --max-time 2 "${REPO_URL}/selkies-patch-input" -o "${TMP_DIR}/selkies-patch-input" 2>/dev/null; then
+    if [ -s "${TMP_DIR}/selkies-patch-input" ] && ! cmp -s "${TMP_DIR}/selkies-patch-input" /usr/local/bin/selkies-patch-input 2>/dev/null; then
+        cp "${TMP_DIR}/selkies-patch-input" /usr/local/bin/selkies-patch-input
+        chmod +x /usr/local/bin/selkies-patch-input
+    fi
+fi
+
 if curl -fsSL --max-time 2 "${REPO_URL}/systemd/start-selkies.sh" -o "${TMP_DIR}/start-selkies.sh" 2>/dev/null; then
     if [ -s "${TMP_DIR}/start-selkies.sh" ] && ! cmp -s "${TMP_DIR}/start-selkies.sh" /usr/local/bin/start-selkies.sh 2>/dev/null; then
         echo "[selkies] Updated start-selkies.sh from repository (takes effect on next session restart)."
@@ -19,5 +26,10 @@ if curl -fsSL --max-time 2 "${REPO_URL}/systemd/start-selkies.sh" -o "${TMP_DIR}
 fi
 
 rm -rf "${TMP_DIR}"
+
+# Ensure Selkies non-US keyboard input patch is intact (fixes Cyrillic/Ukrainian typing without clipboard conflicts)
+if [ -x /usr/local/bin/selkies-patch-input ]; then
+    /usr/local/bin/selkies-patch-input || true
+fi
 
 echo "[selkies] Post-transaction checks completed."

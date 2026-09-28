@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+import glob
+import os
+import pwd
+import sys
+
+def patch_selkies_input():
+    patterns = [
+        "/opt/selkies/lib/python*/site-packages/selkies/input_handler.py",
+        "/opt/selkies/lib64/python*/site-packages/selkies/input_handler.py",
+        "/usr/lib/python*/site-packages/selkies/input_handler.py",
+        "/usr/lib64/python*/site-packages/selkies/input_handler.py",
+        "/usr/local/lib/python*/site-packages/selkies/input_handler.py",
+    ]
+
+    target_files = []
+    for p in patterns:
+        target_files.extend(glob.glob(p))
+
+    old_chord = '''                # The sleeps are the focused app\'s margins to receive the new
+                # offer and to finish fetching it before the selection is restored.
+                await asyncio.sleep(0.02)
+                await self.send_x11_keypress(shift_keysym, down=True)
+                await self.send_x11_keypress(insert_keysym, down=True, neutralize=False)
+                await self.send_x11_keypress(insert_keysym, down=False)
+                await self.send_x11_keypress(shift_keysym, down=False)
+                await asyncio.sleep(0.05)'''
+
+    new_chord = '''                # The sleeps are the focused app\'s margins to receive the new
+                # offer and to finish fetching it before the selection is restored.
+                ctrl_keysym = 0xFFE3
+                v_keysym = 0x0076
+                await asyncio.sleep(0.06)
+                await self.send_x11_keypress(ctrl_keysym, down=True)
+                await self.send_x11_keypress(v_keysym, down=True, neutralize=False)
+                await self.send_x11_keypress(v_keysym, down=False)
+                await self.send_x11_keypress(ctrl_keysym, down=False)
+                await asyncio.sleep(0.35)'''
+
+    old_drop = '''        if self._clipboard_inject_active:
+            return False
+        async with self._clipboard_inject_lock:'''
+
+    new_wait = '''        async with self._clipboard_inject_lock:'''
+
+    for file_path in target_files:
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            changed = False
+            if old_chord in content:
+                content = content.replace(old_chord, new_chord)
+                changed = True
+            if old_drop in content:
+                content = content.replace(old_drop, new_wait)
+                changed = True
+
+            if changed:
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                print(f"[selkies-patch-input] Applied input chord/timing fix to: {file_path}")
+        except Exception as e:
+            print(f"[selkies-patch-input] Warning: failed patching {file_path}: {e}", file=sys.stderr)
+
+    # Configure Konsole shortcut to paste on Ctrl+V in addition to standard terminal paste shortcuts
+    konsole_xml = """<!DOCTYPE gui SYSTEM 'kpartgui.dtd'>
+<gui name="konsole" version="1">
+ <ActionProperties>
+  <Action name="edit_paste" shortcut="Ctrl+V; Ctrl+Shift+V; Shift+Ins"/>
+ </ActionProperties>
+</gui>
+"""
+    # System-wide
+    for sys_dir in ["/etc/xdg/kxmlgui5/konsole", "/etc/xdg/ui"]:
+        try:
+            os.makedirs(sys_dir, exist_ok=True)
+            kfile = os.path.join(sys_dir, "konsoleui.rc")
+            if not os.path.exists(kfile):
+                with open(kfile, "w", encoding="utf-8") as f:
+                    f.write(konsole_xml)
+        except Exception:
+            pass
+
+    # User homes
+    try:
+        for u in pwd.getpwall():
+            if u.pw_uid >= 1000 and os.path.isdir(u.pw_dir):
+                for sub in [".local/share/kxmlgui5/konsole", ".config/kxmlgui5/konsole"]:
+                    user_kdir = os.path.join(u.pw_dir, sub)
+                    try:
+                        os.makedirs(user_kdir, exist_ok=True)
+                        user_kfile = os.path.join(user_kdir, "konsoleui.rc")
+                        if not os.path.exists(user_kfile):
+                            with open(user_kfile, "w", encoding="utf-8") as f:
+                                f.write(konsole_xml)
+                            os.chown(user_kfile, u.pw_uid, u.pw_gid)
+                        os.chown(user_kdir, u.pw_uid, u.pw_gid)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+if __name__ == "__main__":
+    patch_selkies_input()
