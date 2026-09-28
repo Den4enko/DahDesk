@@ -17,16 +17,8 @@ def patch_selkies_input():
     for p in patterns:
         target_files.extend(glob.glob(p))
 
-    old_chord = '''                # The sleeps are the focused app\'s margins to receive the new
-                # offer and to finish fetching it before the selection is restored.
-                await asyncio.sleep(0.02)
-                await self.send_x11_keypress(shift_keysym, down=True)
-                await self.send_x11_keypress(insert_keysym, down=True, neutralize=False)
-                await self.send_x11_keypress(insert_keysym, down=False)
-                await self.send_x11_keypress(shift_keysym, down=False)
-                await asyncio.sleep(0.05)'''
-
-    new_chord = '''                # The sleeps are the focused app\'s margins to receive the new
+    old_chords = [
+        '''                # The sleeps are the focused app\'s margins to receive the new
                 # offer and to finish fetching it before the selection is restored.
                 ctrl_keysym = 0xFFE3
                 v_keysym = 0x0076
@@ -34,6 +26,29 @@ def patch_selkies_input():
                 await self.send_x11_keypress(ctrl_keysym, down=True)
                 await self.send_x11_keypress(v_keysym, down=True, neutralize=False)
                 await self.send_x11_keypress(v_keysym, down=False)
+                await self.send_x11_keypress(ctrl_keysym, down=False)
+                await asyncio.sleep(0.35)''',
+        '''                # The sleeps are the focused app\'s margins to receive the new
+                # offer and to finish fetching it before the selection is restored.
+                await asyncio.sleep(0.02)
+                await self.send_x11_keypress(shift_keysym, down=True)
+                await self.send_x11_keypress(insert_keysym, down=True, neutralize=False)
+                await self.send_x11_keypress(insert_keysym, down=False)
+                await self.send_x11_keypress(shift_keysym, down=False)
+                await asyncio.sleep(0.05)''',
+    ]
+
+    new_chord = '''                # The sleeps are the focused app\'s margins to receive the new
+                # offer and to finish fetching it before the selection is restored.
+                ctrl_keysym = 0xFFE3
+                v_keysym = 0x0076
+                await asyncio.sleep(0.05)
+                await self.send_x11_keypress(ctrl_keysym, down=True)
+                await asyncio.sleep(0.03)
+                await self.send_x11_keypress(v_keysym, down=True, neutralize=False)
+                await asyncio.sleep(0.03)
+                await self.send_x11_keypress(v_keysym, down=False)
+                await asyncio.sleep(0.03)
                 await self.send_x11_keypress(ctrl_keysym, down=False)
                 await asyncio.sleep(0.35)'''
 
@@ -49,9 +64,10 @@ def patch_selkies_input():
                 content = f.read()
 
             changed = False
-            if old_chord in content:
-                content = content.replace(old_chord, new_chord)
-                changed = True
+            for old_chord in old_chords:
+                if old_chord in content:
+                    content = content.replace(old_chord, new_chord)
+                    changed = True
             if old_drop in content:
                 content = content.replace(old_drop, new_wait)
                 changed = True
