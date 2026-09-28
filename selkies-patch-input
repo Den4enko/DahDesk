@@ -98,7 +98,7 @@ def patch_selkies_input():
                 content = f.read()
 
             changed = False
-            if inject_pattern.search(content):
+            if '_restore_after_idle' not in content and inject_pattern.search(content):
                 content = inject_pattern.sub(new_inject_fn + '    async def _clear_injected_clipboard', content)
                 changed = True
 
@@ -151,5 +151,56 @@ def patch_selkies_input():
     except Exception:
         pass
 
+def patch_selkies_session():
+    patterns = [
+        "/opt/selkies/lib/python*/site-packages/selkies/session.py",
+        "/opt/selkies/lib64/python*/site-packages/selkies/session.py",
+        "/usr/lib/python*/site-packages/selkies/session.py",
+        "/usr/lib64/python*/site-packages/selkies/session.py",
+        "/usr/local/lib/python*/site-packages/selkies/session.py",
+    ]
+
+    target_files = []
+    for p in patterns:
+        target_files.extend(glob.glob(p))
+
+    for file_path in target_files:
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            changed = False
+
+            # 1. Update desktop() to record the spawned desktop session process
+            old_spawn = 'self.spawn(bus + shlex.split(entry["Exec"]), env=env)'
+            new_spawn = 'proc = self.spawn(bus + shlex.split(entry["Exec"]), env=env)\n        self.desktop_proc = proc\n        return proc'
+
+            if old_spawn in content and 'self.desktop_proc = ' not in content:
+                content = content.replace(old_spawn, new_spawn)
+                changed = True
+
+            # 2. Update main loop to watch desktop session process and exit for auto-restart when user logs out
+            old_loop = '''        while session.selkies.poll() is None and not stopping:
+            time.sleep(0.5)'''
+
+            new_loop = '''        while session.selkies.poll() is None and not stopping:
+            dproc = getattr(session, "desktop_proc", None)
+            if dproc is not None and dproc.poll() is not None:
+                log(f"desktop session exited with code {dproc.returncode}; stopping session for auto-restart")
+                break
+            time.sleep(0.5)'''
+
+            if old_loop in content and 'dproc = ' not in content:
+                content = content.replace(old_loop, new_loop)
+                changed = True
+
+            if changed:
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                print(f"[selkies-patch-input] Applied session auto-restart on logout fix to: {file_path}")
+        except Exception as e:
+            print(f"[selkies-patch-input] Warning: failed patching session {file_path}: {e}", file=sys.stderr)
+
 if __name__ == "__main__":
     patch_selkies_input()
+    patch_selkies_session()
