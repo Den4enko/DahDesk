@@ -2,6 +2,7 @@
 import glob
 import os
 import pwd
+import re
 import sys
 
 def patch_selkies_input():
@@ -17,46 +18,79 @@ def patch_selkies_input():
     for p in patterns:
         target_files.extend(glob.glob(p))
 
-    old_chords = [
-        '''                # The sleeps are the focused app\'s margins to receive the new
-                # offer and to finish fetching it before the selection is restored.
+    new_inject_fn = '''    async def _inject_text_via_clipboard(self, text: str) -> bool:
+        """Type `text` via clipboard with debounced restore and zero typing lag."""
+        async with self._clipboard_inject_lock:
+            self._clipboard_inject_active = True
+            held_modifiers = list(self.active_modifiers)
+            try:
+                for mod_keysym in held_modifiers:
+                    await self.send_x11_keypress(mod_keysym, down=False)
+
+                # Cancel any pending restore from previous keystrokes
+                restore_task = getattr(self, '_clipboard_restore_task', None)
+                if restore_task and not restore_task.done():
+                    restore_task.cancel()
+
+                # Save the user's real clipboard once before consecutive typing starts
+                if getattr(self, '_saved_user_clipboard', None) is None:
+                    try:
+                        old_data, old_mime = await self.read_clipboard(use_binary=True)
+                        self._saved_user_clipboard = (old_data, old_mime)
+                    except Exception:
+                        self._saved_user_clipboard = (None, None)
+
+                if not await self.write_clipboard(text):
+                    return False
+
+                # Fast, reliable Ctrl+V chord (~60ms total chord window)
                 ctrl_keysym = 0xFFE3
                 v_keysym = 0x0076
-                await asyncio.sleep(0.06)
+                await asyncio.sleep(0.01)
                 await self.send_x11_keypress(ctrl_keysym, down=True)
-                await self.send_x11_keypress(v_keysym, down=True, neutralize=False)
-                await self.send_x11_keypress(v_keysym, down=False)
-                await self.send_x11_keypress(ctrl_keysym, down=False)
-                await asyncio.sleep(0.35)''',
-        '''                # The sleeps are the focused app\'s margins to receive the new
-                # offer and to finish fetching it before the selection is restored.
                 await asyncio.sleep(0.02)
-                await self.send_x11_keypress(shift_keysym, down=True)
-                await self.send_x11_keypress(insert_keysym, down=True, neutralize=False)
-                await self.send_x11_keypress(insert_keysym, down=False)
-                await self.send_x11_keypress(shift_keysym, down=False)
-                await asyncio.sleep(0.05)''',
-    ]
-
-    new_chord = '''                # The sleeps are the focused app\'s margins to receive the new
-                # offer and to finish fetching it before the selection is restored.
-                ctrl_keysym = 0xFFE3
-                v_keysym = 0x0076
-                await asyncio.sleep(0.05)
-                await self.send_x11_keypress(ctrl_keysym, down=True)
-                await asyncio.sleep(0.03)
                 await self.send_x11_keypress(v_keysym, down=True, neutralize=False)
-                await asyncio.sleep(0.03)
+                await asyncio.sleep(0.02)
                 await self.send_x11_keypress(v_keysym, down=False)
-                await asyncio.sleep(0.03)
+                await asyncio.sleep(0.01)
                 await self.send_x11_keypress(ctrl_keysym, down=False)
-                await asyncio.sleep(0.35)'''
 
-    old_drop = '''        if self._clipboard_inject_active:
-            return False
-        async with self._clipboard_inject_lock:'''
+                # Debounced asynchronous restore: wait 0.6s of typing idle before restoring
+                async def _restore_after_idle():
+                    try:
+                        await asyncio.sleep(0.6)
+                        saved = getattr(self, '_saved_user_clipboard', None)
+                        self._saved_user_clipboard = None
+                        if saved:
+                            data, mime = saved
+                            if data is not None:
+                                await self.write_clipboard(data, mime or "text/plain")
+                            elif self.is_wayland:
+                                await self._clear_injected_clipboard()
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception as err:
+                        logger_webrtc_input.debug(f"debounced clipboard restore failed: {err}")
 
-    new_wait = '''        async with self._clipboard_inject_lock:'''
+                self._clipboard_restore_task = asyncio.create_task(_restore_after_idle())
+                return True
+            except Exception as e:
+                logger_webrtc_input.error(f"Clipboard text injection failed: {e}")
+                return False
+            finally:
+                for mod_keysym in held_modifiers:
+                    if mod_keysym in self.active_modifiers:
+                        await self.send_x11_keypress(mod_keysym, down=True)
+                self._clipboard_inject_active = False
+\n'''
+
+    old_timeout = 'msg_type, data = await asyncio.wait_for(self.keyboard_queue.get(), timeout=0.05)'
+    new_timeout = 'msg_type, data = await asyncio.wait_for(self.keyboard_queue.get(), timeout=0.015)'
+
+    inject_pattern = re.compile(
+        r'    async def _inject_text_via_clipboard\(self, text: str\) -> bool:.*?\n    async def _clear_injected_clipboard',
+        re.DOTALL
+    )
 
     for file_path in target_files:
         try:
@@ -64,12 +98,12 @@ def patch_selkies_input():
                 content = f.read()
 
             changed = False
-            for old_chord in old_chords:
-                if old_chord in content:
-                    content = content.replace(old_chord, new_chord)
-                    changed = True
-            if old_drop in content:
-                content = content.replace(old_drop, new_wait)
+            if inject_pattern.search(content):
+                content = inject_pattern.sub(new_inject_fn + '    async def _clear_injected_clipboard', content)
+                changed = True
+
+            if old_timeout in content:
+                content = content.replace(old_timeout, new_timeout)
                 changed = True
 
             if changed:
