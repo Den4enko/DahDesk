@@ -364,7 +364,7 @@ case "$DISTRO" in
             dolphin systemsettings plasma-pa plasma-nm kwrite ark gwenview kde-spectacle kdialog
         )
         apt-get install -y --no-install-recommends "${BASE_PKGS[@]}"
-        apt-get install -y --no-install-recommends plasma-session-x11 2>/dev/null || true
+        apt-get install -y --no-install-recommends plasma-session-wayland plasma-session-x11 2>/dev/null || true
 
         if [ "$PROFILE" = "full" ]; then
             echo "Installing full desktop suite..."
