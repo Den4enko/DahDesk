@@ -116,7 +116,11 @@ case "${ID:-}" in
         ;;
     ubuntu)
         DISTRO="ubuntu"
-        KWIN_LAYER="${LAYER_ARCH}-ubunturesolute-kwin"
+        if [[ "${VERSION_ID:-}" =~ ^26\.[0-9]+ ]]; then
+            KWIN_LAYER="${LAYER_ARCH}-ubunturesolute-kwin"
+        else
+            KWIN_LAYER=""
+        fi
         ;;
     arch|manjaro|endeavouros)
         DISTRO="arch"
@@ -360,6 +364,7 @@ case "$DISTRO" in
             dolphin systemsettings plasma-pa plasma-nm kwrite ark gwenview kde-spectacle kdialog
         )
         apt-get install -y --no-install-recommends "${BASE_PKGS[@]}"
+        apt-get install -y --no-install-recommends plasma-session-x11 2>/dev/null || true
 
         if [ "$PROFILE" = "full" ]; then
             echo "Installing full desktop suite..."
@@ -394,14 +399,14 @@ case "$DISTRO" in
         ;;
     ubuntu)
         UBUNTU_VER="${VERSION_ID:-24.04}"
-        if [[ "$UBUNTU_VER" == "26.04"* ]]; then
+        if [[ "$UBUNTU_VER" =~ ^26\.[0-9]+ ]]; then
             DEB_NAME="selkies-${SELKIES_VERSION}-ubuntu26.04-${DEB_ARCH}.deb"
         else
             DEB_NAME="selkies-${SELKIES_VERSION}-ubuntu24.04-${DEB_ARCH}.deb"
         fi
         DEB_URL="https://github.com/selkies-project/selkies/releases/download/${SELKIES_VERSION}/${DEB_NAME}"
         curl -fsSL "$DEB_URL" -o "/tmp/${DEB_NAME}"
-        dpkg -i "/tmp/${DEB_NAME}" || apt-get install -f -y
+        apt-get install -y --no-install-recommends "/tmp/${DEB_NAME}" || (dpkg -i "/tmp/${DEB_NAME}" && apt-get install -f -y)
         rm -f "/tmp/${DEB_NAME}"
         apt-mark hold kwin-wayland kwin-common selkies 2>/dev/null || true
         ;;
@@ -412,7 +417,7 @@ case "$DISTRO" in
         fi
         DEB_URL="https://github.com/selkies-project/selkies/releases/download/${SELKIES_VERSION}/${DEB_NAME}"
         curl -fsSL "$DEB_URL" -o "/tmp/${DEB_NAME}"
-        dpkg -i "/tmp/${DEB_NAME}" || apt-get install -f -y
+        apt-get install -y --no-install-recommends "/tmp/${DEB_NAME}" || (dpkg -i "/tmp/${DEB_NAME}" && apt-get install -f -y)
         rm -f "/tmp/${DEB_NAME}"
         apt-mark hold kwin-wayland kwin-common selkies 2>/dev/null || true
         ;;
@@ -444,6 +449,17 @@ if [ -n "$KWIN_LAYER" ]; then
         docker export "$CID" | tar -xf - -C / usr/
         docker rm "$CID" >/dev/null
     fi
+
+    # Update library cache and ensure libkwin symlink points to patched binary
+    for kwin_dir in /usr/lib64 /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu /usr/lib; do
+        if [ -d "$kwin_dir" ]; then
+            latest_kwin=$(find "$kwin_dir" -maxdepth 1 -name "libkwin.so.6.*" 2>/dev/null | sort -V | tail -n 1 || true)
+            if [ -n "$latest_kwin" ] && [ -f "$latest_kwin" ]; then
+                ln -sf "$(basename "$latest_kwin")" "${kwin_dir}/libkwin.so.6" 2>/dev/null || true
+            fi
+        fi
+    done
+    ldconfig 2>/dev/null || true
 else
     echo "No Wayland KWin patch available for $DISTRO. Using X11 backend."
 fi
@@ -480,6 +496,7 @@ chmod 0440 "/etc/sudoers.d/${DESKTOP_USER}"
 
 mkdir -p /var/lib/systemd/linger
 touch "/var/lib/systemd/linger/${DESKTOP_USER}"
+loginctl enable-linger "${DESKTOP_USER}" 2>/dev/null || true
 mkdir -pm1777 /tmp/.X11-unix
 
 USER_HOME=$(eval echo "~${DESKTOP_USER}")
@@ -568,8 +585,11 @@ export HOME="${HOME:-/home/${USER}}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/${USER_ID}}"
 export PULSE_SERVER="${PULSE_SERVER:-unix:/run/user/${USER_ID}/pulse/native}"
 export PIPEWIRE_RUNTIME_DIR="${PIPEWIRE_RUNTIME_DIR:-/run/user/${USER_ID}}"
+export KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
 
-for i in {1..30}; do
+mkdir -pm1777 /tmp/.X11-unix 2>/dev/null || true
+
+for i in {1..10}; do
     [ -S "${PULSE_SERVER#unix:}" ] && break
     sleep 0.5
 done
@@ -716,6 +736,7 @@ Environment=XDG_RUNTIME_DIR=/run/user/${USER_ID}
 Environment=PULSE_SERVER=unix:/run/user/${USER_ID}/pulse/native
 Environment=SELKIES_BACKEND=${INITIAL_BACKEND}
 Environment=SELKIES_PORT=${PORT}
+Environment=KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
 Environment=XKB_DEFAULT_LAYOUT=${KEYBOARD_LAYOUTS}
 Environment=XKB_DEFAULT_MODEL=pc105
 ${XKB_VARIANT_LINE}
@@ -735,6 +756,7 @@ systemctl enable NetworkManager.service 2>/dev/null || true
 systemctl enable sshd.service 2>/dev/null || systemctl enable ssh.service 2>/dev/null || true
 
 if pidof systemd &>/dev/null; then
+    systemctl start "user@${USER_ID}.service" 2>/dev/null || true
     systemctl restart selkies
 fi
 

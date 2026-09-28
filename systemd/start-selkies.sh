@@ -7,8 +7,11 @@ export HOME="${HOME:-/home/${USER}}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/${USER_ID}}"
 export PULSE_SERVER="${PULSE_SERVER:-unix:/run/user/${USER_ID}/pulse/native}"
 export PIPEWIRE_RUNTIME_DIR="${PIPEWIRE_RUNTIME_DIR:-/run/user/${USER_ID}}"
+export KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
 
-for i in {1..30}; do
+mkdir -pm1777 /tmp/.X11-unix 2>/dev/null || true
+
+for i in {1..10}; do
     [ -S "${PULSE_SERVER#unix:}" ] && break
     sleep 0.5
 done
