@@ -16,24 +16,21 @@ DahDesk is an opinionated installer that wires these upstream projects together 
 2. **Installs the official Selkies streamer package** from the upstream GitHub release.
 3. **Applies the Linuxserver KWin patch** — pulled directly from `ghcr.io/linuxserver/selkies-layers` — which enables zero-copy GPU capture under nested/unprivileged Wayland.
 4. **Creates a systemd user service** (`selkies.service`) that starts the desktop and streaming stack automatically on boot.
-5. **Installs native package-manager hooks** so every normal system update automatically maintains required KWin capabilities without interrupting active user sessions:
+5. **Installs native package-manager hooks** so every normal system update automatically maintains required KWin capabilities, verifies device permissions, and self-syncs latest components from GitHub without interrupting active user sessions:
    - **Fedora:** DNF5 Actions Plugin (`/etc/dnf/libdnf5-plugins/actions.d/selkies-sync.actions`)
-   - **Ubuntu/Debian:** APT DPkg Post-Invoke (`/etc/apt/apt.conf.d/99selkies-sync`)
-   - **Arch Linux:** Pacman ALPM Hook (`/etc/pacman.d/hooks/selkies-sync.hook`)
 6. **Locks critical packages** (`kwin`, `kwin-libs`, `selkies`) against unintended upstream upgrades that could break streaming.
 
 Once installed, just update your system normally — DahDesk keeps itself consistent automatically.
 
 ---
 
-## Supported Distributions
+## Supported Distribution
+
+DahDesk is built exclusively for **Fedora** (Fedora 44+).
 
 | Distribution | Display Backend | KWin Patch | Package Manager | Auto-Hook |
 |---|---|---|---|---|
-| **Fedora 44** | Native Wayland (zero-copy) | `linuxserver/selkies-layers` overlay | `dnf` | DNF5 Actions |
-| **Ubuntu 26.04** | Native Wayland (zero-copy) | `linuxserver/selkies-layers` overlay | `apt` | APT DPkg Post-Invoke |
-| **Arch Linux** | Native Wayland (zero-copy) | `linuxserver/selkies-layers` overlay | `pacman` | Pacman ALPM Hook |
-| Debian / Kali | X11 fallback | — | `apt` | APT DPkg Post-Invoke |
+| **Fedora 44+** | Native Wayland (zero-copy) | `linuxserver/selkies-layers` overlay | `dnf` / `dnf5` | DNF5 Actions |
 
 ---
 
@@ -70,6 +67,8 @@ curl -fsSL .../install.sh | sudo bash -s -- --user admin --password secret --por
 | `--password <pwd>` | Linux user password | username |
 | `--port <port>` | Web streaming port | `8080` |
 | `--backend <mode>` | Force `wayland` or `x11` | auto |
+| `--gpu` | Force enable GPU hardware acceleration (Mesa, VA-API, and video codecs) | auto-detect |
+| `--no-gpu` | Disable GPU detection and use software rendering | auto-detect |
 | `--keyboard <layouts>` | XKB layouts, comma-separated (e.g. `us,ua`) | `us` |
 | `--keyboard-variants <v>` | XKB variants, comma-separated | |
 | `--keyboard-options <opts>` | XKB options (e.g. `grp:alt_shift_toggle`) | |
@@ -106,24 +105,20 @@ Everything in Essential, plus the complete official KDE Spin group:
 
 ---
 
-## Normal System Updates (Self-Healing)
+## Normal System Updates (Self-Healing & Auto-Sync)
 
 No special scripts needed — just update your system normally:
 
 ```bash
 # Fedora
 sudo dnf update
-
-# Ubuntu / Debian
-sudo apt update && sudo apt upgrade
-
-# Arch Linux
-sudo pacman -Syu
 ```
 
-After every transaction, the native hook runs `/usr/local/bin/selkies-sync`, which:
-- Re-strips `kwin_wayland` Linux capabilities (`setcap -r`)
-- Checks the GitHub repository for newer `start-selkies.sh` and updates silently (takes effect on next session restart)
+After every DNF transaction, the native DNF5 actions hook automatically runs `/usr/local/bin/selkies-sync`, which:
+- Re-strips `kwin_wayland` Linux capabilities (`setcap -r`) for unprivileged container/LXC compatibility
+- Verifies and maintains `/dev/dri/*` and `/dev/nvidia*` device permissions for hardware acceleration
+- Syncs all components directly from GitHub (`selkies-sync`, `selkies-update`, `selkies-patch-input`, `start-selkies.sh`) with atomic replacement and execution bit preservation
+- Maintains Selkies non-US keyboard input patch and session auto-restart hooks
 - Leaves active streaming sessions running uninterrupted
 
 Manual trigger (if needed): `sudo selkies-update`

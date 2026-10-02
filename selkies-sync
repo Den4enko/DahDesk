@@ -6,26 +6,42 @@ echo "[selkies] Running post-update checks..."
 # Ensure kwin capabilities remain stripped for unprivileged containers
 setcap -r /usr/bin/kwin_wayland 2>/dev/null || setcap -r /usr/sbin/kwin_wayland 2>/dev/null || true
 
+# Verify and maintain device permissions
+if [ -d /dev/dri ]; then
+    chmod 0666 /dev/dri/* 2>/dev/null || true
+fi
+if compgen -G "/dev/nvidia*" >/dev/null 2>&1; then
+    chmod 0666 /dev/nvidia* 2>/dev/null || true
+fi
+
 # Auto-sync latest scripts from GitHub repository if reachable
 REPO_URL="${SELKIES_REPO_URL:-https://raw.githubusercontent.com/Den4enko/DahDesk/main}"
 TMP_DIR=$(mktemp -d)
+trap 'rm -rf "${TMP_DIR}"' EXIT
 
-if curl -fsSL --max-time 2 "${REPO_URL}/selkies-patch-input" -o "${TMP_DIR}/selkies-patch-input" 2>/dev/null; then
-    if [ -s "${TMP_DIR}/selkies-patch-input" ] && ! cmp -s "${TMP_DIR}/selkies-patch-input" /usr/local/bin/selkies-patch-input 2>/dev/null; then
-        cp "${TMP_DIR}/selkies-patch-input" /usr/local/bin/selkies-patch-input
-        chmod +x /usr/local/bin/selkies-patch-input
+sync_component() {
+    local src_path="$1"
+    local dest_path="$2"
+    local name
+    name=$(basename "$dest_path")
+    local tmp_file="${TMP_DIR}/${name}"
+    local tmp_dest="${dest_path}.tmp.$$"
+
+    if curl -fsSL --max-time 5 "${REPO_URL}/${src_path}" -o "${tmp_file}" 2>/dev/null; then
+        if [ -s "${tmp_file}" ] && ! cmp -s "${tmp_file}" "${dest_path}" 2>/dev/null; then
+            echo "[selkies] Updating ${name} from repository..."
+            cp "${tmp_file}" "${tmp_dest}"
+            chmod +x "${tmp_dest}"
+            mv -f "${tmp_dest}" "${dest_path}"
+        fi
     fi
-fi
+    rm -f "${tmp_dest}" 2>/dev/null || true
+}
 
-if curl -fsSL --max-time 2 "${REPO_URL}/systemd/start-selkies.sh" -o "${TMP_DIR}/start-selkies.sh" 2>/dev/null; then
-    if [ -s "${TMP_DIR}/start-selkies.sh" ] && ! cmp -s "${TMP_DIR}/start-selkies.sh" /usr/local/bin/start-selkies.sh 2>/dev/null; then
-        echo "[selkies] Updated start-selkies.sh from repository (takes effect on next session restart)."
-        cp "${TMP_DIR}/start-selkies.sh" /usr/local/bin/start-selkies.sh
-        chmod +x /usr/local/bin/start-selkies.sh
-    fi
-fi
-
-rm -rf "${TMP_DIR}"
+sync_component "selkies-sync" "/usr/local/bin/selkies-sync"
+sync_component "selkies-update" "/usr/local/bin/selkies-update"
+sync_component "selkies-patch-input" "/usr/local/bin/selkies-patch-input"
+sync_component "systemd/start-selkies.sh" "/usr/local/bin/start-selkies.sh"
 
 # Ensure Selkies non-US keyboard input patch is intact (fixes Cyrillic/Ukrainian typing without clipboard conflicts)
 if [ -x /usr/local/bin/selkies-patch-input ]; then

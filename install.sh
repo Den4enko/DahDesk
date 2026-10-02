@@ -12,6 +12,7 @@ NON_INTERACTIVE=false
 KEYBOARD_LAYOUTS="us"       # comma-separated XKB layouts, e.g. "us,ua"
 KEYBOARD_VARIANTS=""        # comma-separated variants (can be empty), e.g. ",phonetic"
 KEYBOARD_OPTIONS=""         # XKB options, e.g. "grp:alt_shift_toggle"
+GPU_OVERRIDE=""             # "true", "false", or "" (auto-detect)
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -52,6 +53,14 @@ while [[ $# -gt 0 ]]; do
             KEYBOARD_OPTIONS="$2"
             shift 2
             ;;
+        --gpu|--with-gpu|--enable-gpu)
+            GPU_OVERRIDE="true"
+            shift
+            ;;
+        --no-gpu|--without-gpu|--disable-gpu)
+            GPU_OVERRIDE="false"
+            shift
+            ;;
         -y|--yes)
             NON_INTERACTIVE=true
             shift
@@ -66,6 +75,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --password <pwd>           Desktop user password (sets Linux user password)"
             echo "  --port <port>              Web streaming port (default: 8080)"
             echo "  --backend <mode>           Display backend: wayland or x11 (default: auto)"
+            echo "  --gpu                      Force enable GPU acceleration (Mesa, VA-API, and video codecs)"
+            echo "  --no-gpu                   Force disable GPU detection and use software rendering"
             echo "  --keyboard <layouts>       XKB keyboard layouts, comma-separated (e.g. 'us,ua')"
             echo "  --keyboard-variants <v>    XKB variants, comma-separated (e.g. ',phonetic')"
             echo "  --keyboard-options <opts>  XKB options (e.g. 'grp:alt_shift_toggle')"
@@ -90,16 +101,19 @@ fi
 
 . /etc/os-release
 
+if [ "${ID:-}" != "fedora" ] && [[ ! "${ID_LIKE:-}" =~ fedora ]]; then
+    echo "Error: DahDesk only supports Fedora (Fedora 44+)." >&2
+    exit 1
+fi
+
 ARCH="$(uname -m)"
 case "$ARCH" in
     x86_64)
         LAYER_ARCH="amd64"
-        DEB_ARCH="amd64"
         SELKIES_ARCH="x86_64"
         ;;
     aarch64|arm64)
         LAYER_ARCH="arm64v8"
-        DEB_ARCH="arm64"
         SELKIES_ARCH="aarch64"
         ;;
     *)
@@ -108,48 +122,8 @@ case "$ARCH" in
         ;;
 esac
 
-KWIN_LAYER=""
-case "${ID:-}" in
-    fedora)
-        DISTRO="fedora"
-        KWIN_LAYER="${LAYER_ARCH}-fedora44-kwin"
-        ;;
-    ubuntu)
-        DISTRO="ubuntu"
-        if [[ "${VERSION_ID:-}" =~ ^26\.[0-9]+ ]]; then
-            KWIN_LAYER="${LAYER_ARCH}-ubunturesolute-kwin"
-        else
-            KWIN_LAYER=""
-        fi
-        ;;
-    arch|manjaro|endeavouros)
-        DISTRO="arch"
-        KWIN_LAYER="${LAYER_ARCH}-arch-kwin"
-        ;;
-    kali)
-        DISTRO="kali"
-        KWIN_LAYER="${LAYER_ARCH}-kali-kwin"
-        ;;
-    debian)
-        DISTRO="debian"
-        KWIN_LAYER=""
-        ;;
-    *)
-        if [[ "${ID_LIKE:-}" =~ (fedora|rhel|centos) ]]; then
-            DISTRO="fedora"
-            KWIN_LAYER="${LAYER_ARCH}-fedora44-kwin"
-        elif [[ "${ID_LIKE:-}" =~ (debian|ubuntu) ]]; then
-            DISTRO="debian"
-            KWIN_LAYER=""
-        elif [[ "${ID_LIKE:-}" =~ arch ]]; then
-            DISTRO="arch"
-            KWIN_LAYER="${LAYER_ARCH}-arch-kwin"
-        else
-            echo "Error: Unsupported distribution ($ID)." >&2
-            exit 1
-        fi
-        ;;
-esac
+DISTRO="fedora"
+KWIN_LAYER="${LAYER_ARCH}-fedora44-kwin"
 
 TARGET_BACKEND="Wayland (Native Zero-Copy)"
 if [ -z "$KWIN_LAYER" ]; then
@@ -157,6 +131,79 @@ if [ -z "$KWIN_LAYER" ]; then
 fi
 if [ -n "$BACKEND_OVERRIDE" ]; then
     TARGET_BACKEND="$BACKEND_OVERRIDE (Manual Override)"
+fi
+
+# Detect GPU availability and vendor
+DETECTED_GPU=""
+GPU_FOUND=false
+
+detect_gpu() {
+    # 1. Check NVIDIA device nodes
+    if compgen -G "/dev/nvidia*" >/dev/null 2>&1; then
+        GPU_FOUND=true
+        if [ -f /proc/driver/nvidia/version ]; then
+            DETECTED_GPU="NVIDIA ($(head -n 1 /proc/driver/nvidia/version 2>/dev/null | awk '{print $1, $8}'))"
+        elif command -v nvidia-smi &>/dev/null; then
+            DETECTED_GPU="NVIDIA ($(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n 1 || echo 'GPU'))"
+        else
+            DETECTED_GPU="NVIDIA GPU (/dev/nvidia*)"
+        fi
+    fi
+
+    # 2. Check DRM devices in /dev/dri
+    if compgen -G "/dev/dri/renderD*" >/dev/null 2>&1 || compgen -G "/dev/dri/card*" >/dev/null 2>&1; then
+        GPU_FOUND=true
+        if [ -z "$DETECTED_GPU" ]; then
+            local vendor_id=""
+            for dev in /sys/class/drm/card[0-9] /sys/class/drm/renderD[0-9]*; do
+                if [ -r "${dev}/device/vendor" ]; then
+                    vendor_id=$(cat "${dev}/device/vendor" 2>/dev/null || true)
+                    break
+                fi
+            done
+            case "$vendor_id" in
+                0x8086) DETECTED_GPU="Intel Graphics (DRI/VA-API)" ;;
+                0x1002) DETECTED_GPU="AMD Radeon (DRI/VA-API)" ;;
+                0x10de) DETECTED_GPU="NVIDIA GPU (DRI)" ;;
+                0x1af4) DETECTED_GPU="VirtIO GPU (Virtual/DRI)" ;;
+                0x15ad) DETECTED_GPU="VMware SVGA (Virtual/DRI)" ;;
+                *)
+                    if command -v lspci &>/dev/null; then
+                        local pci_gpu
+                        pci_gpu=$(lspci 2>/dev/null | grep -iE 'vga|3d|display' | head -n 1 | sed 's/.*: //')
+                        if [ -n "$pci_gpu" ]; then
+                            DETECTED_GPU="$pci_gpu"
+                        fi
+                    fi
+                    if [ -z "$DETECTED_GPU" ]; then
+                        local dri_nodes
+                        dri_nodes=$(ls -m /dev/dri/ 2>/dev/null | tr -d '\n')
+                        DETECTED_GPU="DRM/DRI device (/dev/dri: ${dri_nodes})"
+                    fi
+                    ;;
+            esac
+        fi
+    fi
+
+    # 3. Fallback check sysfs DRM
+    if [ "$GPU_FOUND" = false ] && compgen -G "/sys/class/drm/card*" >/dev/null 2>&1; then
+        GPU_FOUND=true
+        DETECTED_GPU="DRM Display Device (/sys/class/drm)"
+    fi
+}
+
+detect_gpu
+
+if [ -n "$GPU_OVERRIDE" ]; then
+    if [ "$GPU_OVERRIDE" = "true" ]; then
+        GPU_ENABLED=true
+        [ -z "$DETECTED_GPU" ] && DETECTED_GPU="Forced by --gpu"
+    else
+        GPU_ENABLED=false
+        DETECTED_GPU="Disabled by --no-gpu"
+    fi
+else
+    GPU_ENABLED="$GPU_FOUND"
 fi
 
 # Detect existing non-root users (UID >= 1000 and not nobody)
@@ -169,6 +216,11 @@ if [ "$NON_INTERACTIVE" = false ] && [ -c /dev/tty ]; then
     echo "=================================================="
     echo "Detected OS:       $DISTRO ($ARCH)"
     echo "Display Backend:   $TARGET_BACKEND"
+    if [ "$GPU_ENABLED" = true ]; then
+        echo "Hardware GPU:      Detected (${DETECTED_GPU})"
+    else
+        echo "Hardware GPU:      None detected (Software rendering)"
+    fi
     echo ""
     echo "[1/3] Select Desktop Installation Profile:"
     echo "  1) Essential Desktop (Recommended)"
@@ -305,6 +357,7 @@ if [ "$NON_INTERACTIVE" = false ] && [ -c /dev/tty ]; then
     echo "  Distribution: $DISTRO ($ARCH)"
     echo "  Profile:      $PROFILE"
     echo "  Backend:      $TARGET_BACKEND"
+    echo "  Hardware GPU: $([ "$GPU_ENABLED" = true ] && echo "Enabled (${DETECTED_GPU})" || echo "Disabled (Software rendering)")"
     echo "  Desktop User: $DESKTOP_USER ($USER_STATUS)"
     echo "  Web Port:     $PORT"
     echo "  Keyboard:     ${KEYBOARD_LAYOUTS}${KEYBOARD_OPTIONS:+ ($KEYBOARD_OPTIONS)}"
@@ -330,6 +383,11 @@ if [ -z "$DESKTOP_USER" ]; then
 fi
 
 echo "Installing distribution packages for profile: $PROFILE..."
+if [ "$GPU_ENABLED" = true ]; then
+    echo "Hardware GPU acceleration enabled: ${DETECTED_GPU}"
+else
+    echo "Hardware GPU acceleration disabled / not detected (using software rendering)."
+fi
 
 case "$DISTRO" in
     fedora)
@@ -342,6 +400,25 @@ case "$DISTRO" in
             kwin kwin-x11 breeze-icon-theme konsole plasma-desktop plasma-workspace plasma-workspace-x11
             dolphin plasma-systemsettings plasma-pa plasma-nm kwrite ark gwenview spectacle kdialog
         )
+        if [ "$GPU_ENABLED" = true ]; then
+            echo "Installing Mesa drivers, VA-API acceleration, and video codecs..."
+            BASE_PKGS+=(
+                mesa-dri-drivers
+                mesa-vulkan-drivers
+                mesa-libGL
+                mesa-libEGL
+                mesa-libgbm
+                libva
+                libva-utils
+                gstreamer1-plugin-libav
+                gstreamer1-plugins-bad-free
+                gstreamer1-plugins-good
+                gstreamer1-plugins-ugly-free
+            )
+            if [ "$ARCH" = "x86_64" ]; then
+                BASE_PKGS+=(libva-intel-media-driver libva-nvidia-driver)
+            fi
+        fi
         dnf install -y --disablerepo=fedora-cisco-openh264 --setopt=install_weak_deps=False --nodocs "${BASE_PKGS[@]}"
 
         if [ "$PROFILE" = "full" ]; then
@@ -352,42 +429,6 @@ case "$DISTRO" in
                 chromium || true
         fi
         ;;
-    ubuntu|debian|kali)
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update
-        BASE_PKGS=(
-            systemd libpam-systemd dbus dbus-x11 sudo procps psmisc iproute2 net-tools curl tar libcap2-bin
-            openssh-server network-manager
-            pipewire pipewire-pulse wireplumber pulseaudio-utils
-            xvfb x11-xserver-utils x11-utils libxkbcommon0 wl-clipboard
-            kwin-wayland kwin-x11 breeze-icon-theme konsole plasma-desktop plasma-workspace
-            dolphin systemsettings plasma-pa plasma-nm kwrite ark gwenview kde-spectacle kdialog
-        )
-        apt-get install -y --no-install-recommends "${BASE_PKGS[@]}"
-        apt-get install -y --no-install-recommends plasma-session-wayland plasma-session-x11 2>/dev/null || true
-
-        if [ "$PROFILE" = "full" ]; then
-            echo "Installing full desktop suite..."
-            apt-get install -y --no-install-recommends kubuntu-desktop 2>/dev/null || apt-get install -y --no-install-recommends kde-standard 2>/dev/null || true
-            apt-get install -y --no-install-recommends chromium-browser 2>/dev/null || apt-get install -y --no-install-recommends chromium 2>/dev/null || true
-        fi
-        ;;
-    arch)
-        BASE_PKGS=(
-            systemd dbus sudo procps-ng psmisc iproute2 net-tools curl tar libcap
-            openssh networkmanager
-            pipewire pipewire-pulse wireplumber libpulse
-            xorg-server-xvfb xorg-xrandr xorg-xrdb libxkbcommon wl-clipboard
-            kwin kwin-x11 breeze-icons konsole plasma-desktop plasma-workspace
-            dolphin systemsettings plasma-pa plasma-nm kwrite ark gwenview spectacle kdialog
-        )
-        pacman -Syu --noconfirm --needed "${BASE_PKGS[@]}"
-
-        if [ "$PROFILE" = "full" ]; then
-            echo "Installing full KDE applications suite..."
-            pacman -Syu --noconfirm --needed kde-applications chromium || true
-        fi
-        ;;
 esac
 
 echo "Installing Selkies Streamer package..."
@@ -396,40 +437,6 @@ case "$DISTRO" in
         RPM_URL="https://github.com/selkies-project/selkies/releases/download/${SELKIES_VERSION}/selkies-${SELKIES_VERSION}-fc-${SELKIES_ARCH}.rpm"
         dnf install -y "$RPM_URL"
         dnf versionlock add kwin kwin-libs kwin-x11 kwin-common selkies 2>/dev/null || true
-        ;;
-    ubuntu)
-        UBUNTU_VER="${VERSION_ID:-24.04}"
-        if [[ "$UBUNTU_VER" =~ ^26\.[0-9]+ ]]; then
-            DEB_NAME="selkies-${SELKIES_VERSION}-ubuntu26.04-${DEB_ARCH}.deb"
-        else
-            DEB_NAME="selkies-${SELKIES_VERSION}-ubuntu24.04-${DEB_ARCH}.deb"
-        fi
-        DEB_URL="https://github.com/selkies-project/selkies/releases/download/${SELKIES_VERSION}/${DEB_NAME}"
-        curl -fsSL "$DEB_URL" -o "/tmp/${DEB_NAME}"
-        apt-get install -y --no-install-recommends "/tmp/${DEB_NAME}" || (dpkg -i "/tmp/${DEB_NAME}" && apt-get install -f -y)
-        rm -f "/tmp/${DEB_NAME}"
-        apt-mark hold kwin-wayland kwin-common selkies 2>/dev/null || true
-        ;;
-    debian|kali)
-        DEB_NAME="selkies-${SELKIES_VERSION}-debianbookworm-${DEB_ARCH}.deb"
-        if [ "${VERSION_CODENAME:-}" = "trixie" ] || [ "${VERSION_ID:-}" = "13" ]; then
-            DEB_NAME="selkies-${SELKIES_VERSION}-debiantrixie-${DEB_ARCH}.deb"
-        fi
-        DEB_URL="https://github.com/selkies-project/selkies/releases/download/${SELKIES_VERSION}/${DEB_NAME}"
-        curl -fsSL "$DEB_URL" -o "/tmp/${DEB_NAME}"
-        apt-get install -y --no-install-recommends "/tmp/${DEB_NAME}" || (dpkg -i "/tmp/${DEB_NAME}" && apt-get install -f -y)
-        rm -f "/tmp/${DEB_NAME}"
-        apt-mark hold kwin-wayland kwin-common selkies 2>/dev/null || true
-        ;;
-    arch)
-        PKG_NAME="selkies-${SELKIES_VERSION}-${SELKIES_ARCH}.pkg.tar.zst"
-        PKG_URL="https://github.com/selkies-project/selkies/releases/download/${SELKIES_VERSION}/${PKG_NAME}"
-        curl -fsSL "$PKG_URL" -o "/tmp/${PKG_NAME}"
-        pacman -U --noconfirm "/tmp/${PKG_NAME}"
-        rm -f "/tmp/${PKG_NAME}"
-        if ! grep -q "^IgnorePkg.*kwin" /etc/pacman.conf; then
-            sed -i '/^#IgnorePkg/a IgnorePkg = kwin selkies' /etc/pacman.conf 2>/dev/null || true
-        fi
         ;;
 esac
 
@@ -451,7 +458,7 @@ if [ -n "$KWIN_LAYER" ]; then
     fi
 
     # Update library cache and ensure libkwin symlink points to patched binary
-    for kwin_dir in /usr/lib64 /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu /usr/lib; do
+    for kwin_dir in /usr/lib64 /usr/lib; do
         if [ -d "$kwin_dir" ]; then
             latest_kwin=$(find "$kwin_dir" -maxdepth 1 -name "libkwin.so.6.*" 2>/dev/null | sort -V | tail -n 1 || true)
             if [ -n "$latest_kwin" ] && [ -f "$latest_kwin" ]; then
@@ -867,26 +874,42 @@ echo "[selkies] Running post-update checks..."
 # Ensure kwin capabilities remain stripped for unprivileged containers
 setcap -r /usr/bin/kwin_wayland 2>/dev/null || setcap -r /usr/sbin/kwin_wayland 2>/dev/null || true
 
+# Verify and maintain device permissions
+if [ -d /dev/dri ]; then
+    chmod 0666 /dev/dri/* 2>/dev/null || true
+fi
+if compgen -G "/dev/nvidia*" >/dev/null 2>&1; then
+    chmod 0666 /dev/nvidia* 2>/dev/null || true
+fi
+
 # Auto-sync latest scripts from GitHub repository if reachable
 REPO_URL="${SELKIES_REPO_URL:-https://raw.githubusercontent.com/Den4enko/DahDesk/main}"
 TMP_DIR=$(mktemp -d)
+trap 'rm -rf "${TMP_DIR}"' EXIT
 
-if curl -fsSL --max-time 2 "${REPO_URL}/selkies-patch-input" -o "${TMP_DIR}/selkies-patch-input" 2>/dev/null; then
-    if [ -s "${TMP_DIR}/selkies-patch-input" ] && ! cmp -s "${TMP_DIR}/selkies-patch-input" /usr/local/bin/selkies-patch-input 2>/dev/null; then
-        cp "${TMP_DIR}/selkies-patch-input" /usr/local/bin/selkies-patch-input
-        chmod +x /usr/local/bin/selkies-patch-input
+sync_component() {
+    local src_path="$1"
+    local dest_path="$2"
+    local name
+    name=$(basename "$dest_path")
+    local tmp_file="${TMP_DIR}/${name}"
+    local tmp_dest="${dest_path}.tmp.$$"
+
+    if curl -fsSL --max-time 5 "${REPO_URL}/${src_path}" -o "${tmp_file}" 2>/dev/null; then
+        if [ -s "${tmp_file}" ] && ! cmp -s "${tmp_file}" "${dest_path}" 2>/dev/null; then
+            echo "[selkies] Updating ${name} from repository..."
+            cp "${tmp_file}" "${tmp_dest}"
+            chmod +x "${tmp_dest}"
+            mv -f "${tmp_dest}" "${dest_path}"
+        fi
     fi
-fi
+    rm -f "${tmp_dest}" 2>/dev/null || true
+}
 
-if curl -fsSL --max-time 2 "${REPO_URL}/systemd/start-selkies.sh" -o "${TMP_DIR}/start-selkies.sh" 2>/dev/null; then
-    if [ -s "${TMP_DIR}/start-selkies.sh" ] && ! cmp -s "${TMP_DIR}/start-selkies.sh" /usr/local/bin/start-selkies.sh 2>/dev/null; then
-        echo "[selkies] Updated start-selkies.sh from repository (takes effect on next session restart)."
-        cp "${TMP_DIR}/start-selkies.sh" /usr/local/bin/start-selkies.sh
-        chmod +x /usr/local/bin/start-selkies.sh
-    fi
-fi
-
-rm -rf "${TMP_DIR}"
+sync_component "selkies-sync" "/usr/local/bin/selkies-sync"
+sync_component "selkies-update" "/usr/local/bin/selkies-update"
+sync_component "selkies-patch-input" "/usr/local/bin/selkies-patch-input"
+sync_component "systemd/start-selkies.sh" "/usr/local/bin/start-selkies.sh"
 
 # Ensure Selkies non-US keyboard input patch is intact (fixes Cyrillic/Ukrainian typing without clipboard conflicts)
 if [ -x /usr/local/bin/selkies-patch-input ]; then
@@ -905,27 +928,6 @@ case "$DISTRO" in
 post_transaction:*:in::/usr/local/bin/selkies-sync
 EOF
         ;;
-    ubuntu|debian|kali)
-        mkdir -p /etc/apt/apt.conf.d
-        cat << "EOF" > /etc/apt/apt.conf.d/99selkies-sync
-DPkg::Post-Invoke {"/usr/local/bin/selkies-sync || true";};
-EOF
-        ;;
-    arch)
-        mkdir -p /etc/pacman.d/hooks
-        cat << "EOF" > /etc/pacman.d/hooks/selkies-sync.hook
-[Trigger]
-Operation = Install
-Operation = Upgrade
-Type = Package
-Target = *
-
-[Action]
-Description = Syncing DahDesk scripts and permissions...
-When = PostTransaction
-Exec = /usr/local/bin/selkies-sync
-EOF
-        ;;
 esac
 
 cat << 'EOF' > /usr/local/bin/selkies-update
@@ -938,13 +940,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 echo "Running system package updates..."
-if command -v dnf &>/dev/null; then
-    dnf update -y --disablerepo=fedora-cisco-openh264
-elif command -v apt-get &>/dev/null; then
-    apt-get update && apt-get upgrade -y
-elif command -v pacman &>/dev/null; then
-    pacman -Syu --noconfirm
-fi
+dnf update -y --disablerepo=fedora-cisco-openh264
 EOF
 chmod +x /usr/local/bin/selkies-update
 
@@ -985,7 +981,7 @@ Environment=XKB_DEFAULT_LAYOUT=${KEYBOARD_LAYOUTS}
 Environment=XKB_DEFAULT_MODEL=pc105
 ${XKB_VARIANT_LINE}
 ${XKB_OPTIONS_LINE}
-ExecStartPre=+/bin/sh -c "setcap -r /usr/bin/kwin_wayland 2>/dev/null || setcap -r /usr/sbin/kwin_wayland 2>/dev/null || true"
+ExecStartPre=+/bin/sh -c "setcap -r /usr/bin/kwin_wayland 2>/dev/null || setcap -r /usr/sbin/kwin_wayland 2>/dev/null || true; [ -d /dev/dri ] && chmod 0666 /dev/dri/* 2>/dev/null || true; compgen -G '/dev/nvidia*' >/dev/null 2>&1 && chmod 0666 /dev/nvidia* 2>/dev/null || true"
 ExecStart=/usr/local/bin/start-selkies.sh
 Restart=always
 RestartSec=2
@@ -1009,6 +1005,7 @@ echo "  DahDesk Installation Complete!"
 echo "=================================================="
 echo "Profile:      ${PROFILE}"
 echo "Backend:      ${INITIAL_BACKEND}"
+echo "Hardware GPU: $([ "$GPU_ENABLED" = true ] && echo "Active (${DETECTED_GPU})" || echo "None / Software rendering")"
 echo "Web URL:      https://<server-ip>:${PORT}/"
 echo "Desktop User: ${DESKTOP_USER}"
 if [ "$SET_PASSWORD" = true ]; then
