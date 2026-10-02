@@ -426,19 +426,17 @@ case "$DISTRO" in
                 gstreamer1-plugins-ugly-free
                 gstreamer1-vaapi
             )
-            if [ "$ARCH" = "x86_64" ]; then
-                BASE_PKGS+=(
-                    mesa-va-drivers-freeworld
-                    mesa-vdpau-drivers-freeworld
-                    intel-media-driver
-                    libva-intel-driver
-                    libva-nvidia-driver
-                )
-            fi
         fi
-        dnf install -y --disablerepo=fedora-cisco-openh264 --setopt=install_weak_deps=False --nodocs "${BASE_PKGS[@]}"
+        dnf install -y --disablerepo=fedora-cisco-openh264 --setopt=install_weak_deps=False --nodocs --skip-unavailable "${BASE_PKGS[@]}"
 
         if [ "$GPU_ENABLED" = true ] && [ "$ARCH" = "x86_64" ]; then
+            # Install optional freeworld drivers separately (skip any not available in repos)
+            dnf install -y --disablerepo=fedora-cisco-openh264 --setopt=install_weak_deps=False --nodocs --skip-unavailable \
+                mesa-va-drivers-freeworld \
+                mesa-vdpau-drivers-freeworld \
+                intel-media-driver \
+                libva-intel-driver \
+                libva-nvidia-driver 2>/dev/null || true
             dnf swap -y mesa-va-drivers mesa-va-drivers-freeworld --allowerasing 2>/dev/null || true
         fi
 
