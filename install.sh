@@ -185,6 +185,11 @@ detect_gpu() {
         fi
     fi
 
+    DRI_RENDER_NODE=""
+    if compgen -G "/dev/dri/renderD*" >/dev/null 2>&1; then
+        DRI_RENDER_NODE=$(ls /dev/dri/renderD* 2>/dev/null | head -n 1 || true)
+    fi
+
     # 3. Fallback check sysfs DRM
     if [ "$GPU_FOUND" = false ] && compgen -G "/sys/class/drm/card*" >/dev/null 2>&1; then
         GPU_FOUND=true
@@ -401,7 +406,12 @@ case "$DISTRO" in
             dolphin plasma-systemsettings plasma-pa plasma-nm kwrite ark gwenview spectacle kdialog
         )
         if [ "$GPU_ENABLED" = true ]; then
-            echo "Installing Mesa drivers, VA-API acceleration, and video codecs..."
+            echo "Enabling RPM Fusion repositories for hardware video codecs (VA-API freeworld)..."
+            dnf install -y --nogpgcheck \
+                "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
+                "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm" 2>/dev/null || true
+
+            echo "Installing Mesa drivers, VA-API acceleration, and freeworld video codecs..."
             BASE_PKGS+=(
                 mesa-dri-drivers
                 mesa-vulkan-drivers
@@ -414,12 +424,23 @@ case "$DISTRO" in
                 gstreamer1-plugins-bad-free
                 gstreamer1-plugins-good
                 gstreamer1-plugins-ugly-free
+                gstreamer1-vaapi
             )
             if [ "$ARCH" = "x86_64" ]; then
-                BASE_PKGS+=(libva-intel-media-driver libva-nvidia-driver)
+                BASE_PKGS+=(
+                    mesa-va-drivers-freeworld
+                    mesa-vdpau-drivers-freeworld
+                    intel-media-driver
+                    libva-intel-driver
+                    libva-nvidia-driver
+                )
             fi
         fi
         dnf install -y --disablerepo=fedora-cisco-openh264 --setopt=install_weak_deps=False --nodocs "${BASE_PKGS[@]}"
+
+        if [ "$GPU_ENABLED" = true ] && [ "$ARCH" = "x86_64" ]; then
+            dnf swap -y mesa-va-drivers mesa-va-drivers-freeworld --allowerasing 2>/dev/null || true
+        fi
 
         if [ "$PROFILE" = "full" ]; then
             echo "Installing complete Fedora KDE Desktop group..."
@@ -820,6 +841,7 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/${USER_ID}}"
 export PULSE_SERVER="${PULSE_SERVER:-unix:/run/user/${USER_ID}/pulse/native}"
 export PIPEWIRE_RUNTIME_DIR="${PIPEWIRE_RUNTIME_DIR:-/run/user/${USER_ID}}"
 export KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
+export SELKIES_USE_PAINT_OVER_QUALITY="${SELKIES_USE_PAINT_OVER_QUALITY:-false}"
 
 mkdir -pm1777 /tmp/.X11-unix 2>/dev/null || true
 
@@ -957,6 +979,17 @@ XKB_VARIANT_LINE=""
 XKB_OPTIONS_LINE=""
 [ -n "${KEYBOARD_OPTIONS}" ] && XKB_OPTIONS_LINE="Environment=XKB_DEFAULT_OPTIONS=${KEYBOARD_OPTIONS}"
 
+# Build optional GPU env lines for the service unit
+GPU_SERVICE_ENV=""
+if [ "$GPU_ENABLED" = true ]; then
+    GPU_SERVICE_ENV="Environment=DISABLE_DRI3=false
+Environment=__GL_SYNC_TO_VBLANK=0"
+    if [ -n "$DRI_RENDER_NODE" ]; then
+        GPU_SERVICE_ENV="${GPU_SERVICE_ENV}
+Environment=DRI_NODE=${DRI_RENDER_NODE}"
+    fi
+fi
+
 cat << EOF > /etc/systemd/system/selkies.service
 [Unit]
 Description=DahDesk - KDE Desktop Streaming Service
@@ -976,11 +1009,13 @@ Environment=XDG_RUNTIME_DIR=/run/user/${USER_ID}
 Environment=PULSE_SERVER=unix:/run/user/${USER_ID}/pulse/native
 Environment=SELKIES_BACKEND=${INITIAL_BACKEND}
 Environment=SELKIES_PORT=${PORT}
+Environment=SELKIES_USE_PAINT_OVER_QUALITY=false
 Environment=KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
 Environment=XKB_DEFAULT_LAYOUT=${KEYBOARD_LAYOUTS}
 Environment=XKB_DEFAULT_MODEL=pc105
 ${XKB_VARIANT_LINE}
 ${XKB_OPTIONS_LINE}
+${GPU_SERVICE_ENV}
 ExecStartPre=+/bin/sh -c "setcap -r /usr/bin/kwin_wayland 2>/dev/null || setcap -r /usr/sbin/kwin_wayland 2>/dev/null || true; [ -d /dev/dri ] && chmod 0666 /dev/dri/* 2>/dev/null || true; compgen -G '/dev/nvidia*' >/dev/null 2>&1 && chmod 0666 /dev/nvidia* 2>/dev/null || true"
 ExecStart=/usr/local/bin/start-selkies.sh
 Restart=always
