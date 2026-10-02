@@ -841,7 +841,6 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/${USER_ID}}"
 export PULSE_SERVER="${PULSE_SERVER:-unix:/run/user/${USER_ID}/pulse/native}"
 export PIPEWIRE_RUNTIME_DIR="${PIPEWIRE_RUNTIME_DIR:-/run/user/${USER_ID}}"
 export KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
-export SELKIES_USE_PAINT_OVER_QUALITY="${SELKIES_USE_PAINT_OVER_QUALITY:-false}"
 
 mkdir -pm1777 /tmp/.X11-unix 2>/dev/null || true
 
@@ -1009,7 +1008,6 @@ Environment=XDG_RUNTIME_DIR=/run/user/${USER_ID}
 Environment=PULSE_SERVER=unix:/run/user/${USER_ID}/pulse/native
 Environment=SELKIES_BACKEND=${INITIAL_BACKEND}
 Environment=SELKIES_PORT=${PORT}
-Environment=SELKIES_USE_PAINT_OVER_QUALITY=false
 Environment=KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
 Environment=XKB_DEFAULT_LAYOUT=${KEYBOARD_LAYOUTS}
 Environment=XKB_DEFAULT_MODEL=pc105
