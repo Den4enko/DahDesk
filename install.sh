@@ -461,6 +461,29 @@ case "$DISTRO" in
         ;;
 esac
 
+echo "Installing Rust wl-clipboard (wl-clipboard-rs-tools) for improved clipboard performance..."
+_install_rust_wl_clipboard() {
+    local _CARGO_HOME="/root/.cargo-wl-tmp"
+    local _RUSTUP_HOME="/root/.rustup-wl-tmp"
+    local _INSTALLED_CARGO=false
+    if ! command -v cargo &>/dev/null; then
+        dnf install -y --setopt=install_weak_deps=False --nodocs cargo rust || return 0
+        _INSTALLED_CARGO=true
+    fi
+    CARGO_HOME="$_CARGO_HOME" cargo install --root /usr wl-clipboard-rs-tools \
+        2>&1 | tail -5 || true
+    rm -rf "$_CARGO_HOME"
+    if "$_INSTALLED_CARGO"; then
+        dnf remove -y cargo rust 2>/dev/null || true
+    fi
+    if [ -x /usr/bin/wl-copy ]; then
+        echo "Rust wl-clipboard installed successfully."
+    else
+        echo "Warning: Rust wl-clipboard build failed; keeping C version."
+    fi
+}
+_install_rust_wl_clipboard
+
 if [ -n "$KWIN_LAYER" ]; then
     echo "Applying KWin nested Wayland patch ($KWIN_LAYER)..."
     TOKEN=$(curl -s "https://ghcr.io/token?scope=repository:linuxserver/selkies-layers:pull" | grep -o '"token":"[^"]*' | cut -d'"' -f4)
@@ -1009,8 +1032,6 @@ Environment=PULSE_SERVER=unix:/run/user/${USER_ID}/pulse/native
 Environment=SELKIES_BACKEND=${INITIAL_BACKEND}
 Environment=SELKIES_PORT=${PORT}
 Environment=KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
-Environment=XKB_DEFAULT_LAYOUT=${KEYBOARD_LAYOUTS}
-Environment=XKB_DEFAULT_MODEL=pc105
 ${XKB_VARIANT_LINE}
 ${XKB_OPTIONS_LINE}
 ${GPU_SERVICE_ENV}
