@@ -401,7 +401,7 @@ case "$DISTRO" in
             dbus dbus-tools dbus-x11 sudo procps-ng psmisc iproute net-tools curl tar libcap
             python3-dnf-plugin-versionlock libdnf5-plugin-actions NetworkManager openssh-server
             pipewire pipewire-pulse pipewire-utils wireplumber pulseaudio-utils
-            xorg-x11-server-Xvfb xrandr xrdb libxkbcommon wl-clipboard
+            xorg-x11-server-Xvfb xrandr xrdb libxkbcommon wl-clipboard xdotool
             kwin kwin-x11 breeze-icon-theme konsole plasma-desktop plasma-workspace plasma-workspace-x11
             dolphin plasma-systemsettings plasma-pa plasma-nm kwrite ark gwenview spectacle kdialog
         )
