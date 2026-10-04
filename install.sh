@@ -715,6 +715,7 @@ systemctl mask fwupd.service 2>/dev/null || true
 
 echo "Deploying system services and updater..."
 cat << 'EOF' > /usr/local/bin/selkies-patch-input
+#!/usr/bin/env python3
 import glob
 import os
 import pwd
