@@ -274,7 +274,11 @@ if [ "$CONFIG_EXISTS" = true ] && [ "$RECONFIGURE" = false ]; then
     echo "  Profile:      ${PROFILE}"
     echo "  Desktop User: ${DESKTOP_USER}"
     echo "  Web Port:     ${PORT}"
-    echo "  Keyboard:     ${KEYBOARD_LAYOUTS}${KEYBOARD_OPTIONS:+ ($KEYBOARD_OPTIONS)}"
+    if [ "${KEYBOARD_LAYOUTS}" != "us" ]; then
+        echo "  Keyboard:     ${KEYBOARD_LAYOUTS}${KEYBOARD_OPTIONS:+ ($KEYBOARD_OPTIONS)}"
+    else
+        echo "  Keyboard:     Universal Client-Sync (Auto layout from browser)"
+    fi
     echo ""
     echo "  (Run with --reconfigure to change these settings)"
     echo "=================================================="
@@ -380,47 +384,7 @@ if [ "$NON_INTERACTIVE" = false ] && [ -c /dev/tty ]; then
     fi
 
     echo ""
-    echo "[3/4] Keyboard Input Mode:"
-    echo "  1) Universal Client-Sync (Recommended, Webtop-style)"
-    echo "     -> Types seamlessly in ANY client language/layout (US, Ukrainian, German, etc.)"
-    echo "        via Selkies dynamic keysym engine without manual layout switching."
-    echo "  2) Custom Guest XKB Layouts"
-    echo "     -> Configure specific server-side XKB layouts and manual shortcut toggle."
-    echo ""
-    read -r -p "Select choice [1-2] (default: 1): " choice_kbd < /dev/tty || choice_kbd=""
-    choice_kbd="${choice_kbd:-1}"
-    if [ "$choice_kbd" = "2" ]; then
-        read -r -p "Enter XKB layout(s), comma-separated (e.g. us,ua): " input_kbdl < /dev/tty || input_kbdl=""
-        KEYBOARD_LAYOUTS="${input_kbdl:-us}"
-        if [[ "$KEYBOARD_LAYOUTS" == *","* ]]; then
-            echo ""
-            echo "  Switch shortcut options:"
-            echo "    1) Alt+Shift   (grp:alt_shift_toggle) [Default]"
-            echo "    2) Ctrl+Shift  (grp:ctrl_shift_toggle)"
-            echo "    3) Super+Space (grp:win_space_toggle)"
-            echo "    4) CapsLock    (grp:caps_toggle)"
-            echo "    5) Custom (enter manually)"
-            echo ""
-            read -r -p "Shortcut choice [1-5] (default: 1): " kbdopt < /dev/tty || kbdopt=""
-            kbdopt="${kbdopt:-1}"
-            case "$kbdopt" in
-                2) KEYBOARD_OPTIONS="grp:ctrl_shift_toggle" ;;
-                3) KEYBOARD_OPTIONS="grp:win_space_toggle" ;;
-                4) KEYBOARD_OPTIONS="grp:caps_toggle" ;;
-                5)
-                    read -r -p "Enter XKB option string: " KEYBOARD_OPTIONS < /dev/tty || KEYBOARD_OPTIONS=""
-                    ;;
-                *) KEYBOARD_OPTIONS="grp:alt_shift_toggle" ;;
-            esac
-        fi
-    else
-        KEYBOARD_LAYOUTS="us"
-        KEYBOARD_VARIANTS=""
-        KEYBOARD_OPTIONS=""
-    fi
-
-    echo ""
-    read -r -p "[4/4] Web Streaming Port (default: $PORT): " input_port < /dev/tty || input_port=""
+    read -r -p "[3/3] Web Streaming Port (default: $PORT): " input_port < /dev/tty || input_port=""
     PORT="${input_port:-$PORT}"
 
     USER_STATUS="New"
@@ -437,7 +401,11 @@ if [ "$NON_INTERACTIVE" = false ] && [ -c /dev/tty ]; then
     echo "  Hardware GPU: $([ "$GPU_ENABLED" = true ] && echo "Enabled (${DETECTED_GPU})" || echo "Disabled (Software rendering)")"
     echo "  Desktop User: $DESKTOP_USER ($USER_STATUS)"
     echo "  Web Port:     $PORT"
-    echo "  Keyboard:     ${KEYBOARD_LAYOUTS}${KEYBOARD_OPTIONS:+ ($KEYBOARD_OPTIONS)}"
+    if [ "${KEYBOARD_LAYOUTS}" != "us" ]; then
+        echo "  Keyboard:     ${KEYBOARD_LAYOUTS}${KEYBOARD_OPTIONS:+ ($KEYBOARD_OPTIONS)}"
+    else
+        echo "  Keyboard:     Universal Client-Sync (Auto layout from browser)"
+    fi
     echo "  HTTP Auth:    Disabled (Direct Web Access)"
     echo "--------------------------------------------------"
     read -r -p "Proceed with installation? [Y/n]: " proceed < /dev/tty || proceed=""

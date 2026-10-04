@@ -37,7 +37,7 @@ DahDesk is built exclusively for **Fedora** (Fedora 44+).
 ## Quickstart
 
 ```bash
-# Interactive setup — prompts for profile, user, port, keyboard layout:
+# Interactive setup — prompts for profile, user, port:
 curl -fsSL https://raw.githubusercontent.com/Den4enko/DahDesk/main/install.sh | sudo bash
 
 # Or with wget:
