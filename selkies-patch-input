@@ -183,7 +183,19 @@ CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
                                     self._route_key_as_text(keysym)
                                     continue"""
 
-    new_block_2 = """                        if (not is_unicode_fallback
+    clean_block_2 = """                        if (not is_unicode_fallback
+                                and keysym is not None and not native_inject()
+                                and keysym not in self.MODIFIER_KEYSYMS
+                                and not (self.active_modifiers & self.ACTION_MODIFIER_KEYSYMS)):
+                            char_to_type = keysym_to_character(keysym)
+                            if char_to_type is not None:
+                                owner = await self._ensure_wayland_keymap_owner()
+                                if owner is None or not owner.resolves(keysym):
+                                    unicode_buffer.append(char_to_type)
+                                    self._route_key_as_text(keysym)
+                                    continue"""
+
+    old_level_match_block = """                        if (not is_unicode_fallback
                                 and keysym is not None and not native_inject()
                                 and keysym not in self.MODIFIER_KEYSYMS
                                 and not (self.active_modifiers & self.ACTION_MODIFIER_KEYSYMS)):
@@ -215,7 +227,157 @@ CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
 
                         await self.send_x11_keypress(keysym, down=True)
                         if keysym in self.ACTION_MODIFIER_KEYSYMS:
-                            await asyncio.sleep(0.015)"""
+                            await asyncio.sleep(0.02)"""
+
+    old_wl_press_release = '''        lifted = self._held_conflicts(set(mods)) if neutralize else []
+        for m in lifted:
+            self._inject(m, 0)
+        synthed = []
+        for m in mods:
+            already = (m in self._down
+                       or (m == self._shift_kc and self._shift_r_kc in self._down))
+            if already and m not in self._mod_refs:
+                continue
+            self._mod_refs[m] = self._mod_refs.get(m, 0) + 1
+            if self._mod_refs[m] == 1:
+                self._inject(m, 1)
+            synthed.append(m)
+        self._pressed[keysym] = (kc, tuple(synthed))
+        self._inject(kc, 1)
+        for m in reversed(lifted):
+            self._inject(m, 1)
+
+    def release(self, keysym: int) -> None:
+        """Release a pressed keysym and un-refcount the modifiers its press synthesized."""
+        held = self._pressed.pop(keysym, None)
+        if held is None:
+            return
+        kc, mods = held
+        self._inject(kc, 0)
+        for m in reversed(mods):
+            refs = self._mod_refs.get(m, 0) - 1
+            if refs <= 0:
+                self._mod_refs.pop(m, None)
+                self._inject(m, 0)
+            else:
+                self._mod_refs[m] = refs'''
+
+    new_wl_press_release = '''        lifted = self._held_conflicts(set(mods)) if neutralize else []
+        for m in lifted:
+            self._inject(m, 0)
+        if lifted:
+            time.sleep(0.005)
+        synthed = []
+        for m in mods:
+            already = (m in self._down
+                       or (m == self._shift_kc and self._shift_r_kc in self._down))
+            if already and m not in self._mod_refs:
+                continue
+            self._mod_refs[m] = self._mod_refs.get(m, 0) + 1
+            if self._mod_refs[m] == 1:
+                self._inject(m, 1)
+            synthed.append(m)
+        self._pressed[keysym] = (kc, tuple(synthed), tuple(lifted))
+        self._inject(kc, 1)
+
+    def release(self, keysym: int) -> None:
+        """Release a pressed keysym and un-refcount the modifiers its press synthesized."""
+        held = self._pressed.pop(keysym, None)
+        if held is None:
+            return
+        kc = held[0]
+        mods = held[1]
+        lifted = held[2] if len(held) > 2 else ()
+        self._inject(kc, 0)
+        for m in reversed(mods):
+            refs = self._mod_refs.get(m, 0) - 1
+            if refs <= 0:
+                self._mod_refs.pop(m, None)
+                self._inject(m, 0)
+            else:
+                self._mod_refs[m] = refs
+        if lifted:
+            time.sleep(0.005)
+            active_mods = getattr(self, 'active_modifiers', None)
+            for m in reversed(lifted):
+                should_restore = True
+                if active_mods is not None:
+                    if m == self._shift_kc and 0xFFE1 not in active_mods:
+                        should_restore = False
+                    elif m == self._shift_r_kc and 0xFFE2 not in active_mods:
+                        should_restore = False
+                    elif m == self._altgr_kc and not (active_mods & {0xFE03, 0xFF7E, 65027}):
+                        should_restore = False
+                if should_restore and m not in self._down:
+                    self._inject(m, 1)'''
+
+    old_owner_build = '''                def _build():
+                    text = self.wayland_input.get_xkb_keymap_string()
+                    owner = _WaylandKeymapOwner(self.wayland_input, text)
+                    if previous is not None:
+                        owner.adopt_held(previous)
+                    return owner'''
+
+    new_owner_build = '''                def _build():
+                    text = self.wayland_input.get_xkb_keymap_string()
+                    owner = _WaylandKeymapOwner(self.wayland_input, text)
+                    owner.active_modifiers = self.active_modifiers
+                    if previous is not None:
+                        owner.adopt_held(previous)
+                    return owner'''
+
+    old_owner_cached = '''        if self._wl_keymap_owner is not None and not self._wl_keymap_stale:
+            return self._wl_keymap_owner'''
+
+    new_owner_cached = '''        if self._wl_keymap_owner is not None and not self._wl_keymap_stale:
+            self._wl_keymap_owner.active_modifiers = self.active_modifiers
+            return self._wl_keymap_owner'''
+
+    old_xtest = '''        xtest.fake_input(self._d, Xlib.X.KeyPress, kc)
+        self._pressed_kc[keysym] = kc
+        for m in reversed(lifted):
+            xtest.fake_input(self._d, Xlib.X.KeyPress, m)
+        self._d.flush()
+
+    def release(self, keysym: int) -> None:
+        """Release a keysym, replaying its press-time keycode.
+
+        Only an untracked press is re-resolved: the layout may have changed
+        mid-keystroke, so a re-resolve of a tracked one could miss the key.
+        """
+        kc = self._pressed_kc.pop(keysym, None)
+        if kc is None:
+            kc, _, _ = self._resolve(keysym)
+            self._settle()
+        self._leave_group(keysym)
+        xtest.fake_input(self._d, Xlib.X.KeyRelease, kc)
+        for m in reversed(self._synth_mods.pop(keysym, ())):
+            xtest.fake_input(self._d, Xlib.X.KeyRelease, m)'''
+
+    new_xtest = '''        if lifted:
+            if not hasattr(self, '_lifted_mods'):
+                self._lifted_mods = {}
+            self._lifted_mods[keysym] = tuple(lifted)
+        xtest.fake_input(self._d, Xlib.X.KeyPress, kc)
+        self._pressed_kc[keysym] = kc
+        self._d.flush()
+
+    def release(self, keysym: int) -> None:
+        """Release a keysym, replaying its press-time keycode.
+
+        Only an untracked press is re-resolved: the layout may have changed
+        mid-keystroke, so a re-resolve of a tracked one could miss the key.
+        """
+        kc = self._pressed_kc.pop(keysym, None)
+        if kc is None:
+            kc, _, _ = self._resolve(keysym)
+            self._settle()
+        self._leave_group(keysym)
+        xtest.fake_input(self._d, Xlib.X.KeyRelease, kc)
+        for m in reversed(self._synth_mods.pop(keysym, ())):
+            xtest.fake_input(self._d, Xlib.X.KeyRelease, m)
+        for m in reversed(getattr(self, '_lifted_mods', {}).pop(keysym, ())):
+            xtest.fake_input(self._d, Xlib.X.KeyPress, m)'''
 
     for file_path in target_files:
         try:
@@ -241,12 +403,34 @@ CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
                 content = content.replace(old_block_1, new_block_1)
                 changed = True
 
-            if "level_match = False" not in content and old_block_2 in content:
-                content = content.replace(old_block_2, new_block_2)
+            if old_level_match_block in content:
+                content = content.replace(old_level_match_block, clean_block_2)
+                changed = True
+            elif old_block_2 in content:
+                content = content.replace(old_block_2, clean_block_2)
                 changed = True
 
-            if "if keysym in self.ACTION_MODIFIER_KEYSYMS:" not in content and old_block_3 in content:
+            if "await asyncio.sleep(0.015)" in content:
+                content = content.replace("await asyncio.sleep(0.015)", "await asyncio.sleep(0.02)")
+                changed = True
+            elif "await asyncio.sleep(0.02)" not in content and old_block_3 in content:
                 content = content.replace(old_block_3, new_block_3)
+                changed = True
+
+            if old_wl_press_release in content:
+                content = content.replace(old_wl_press_release, new_wl_press_release)
+                changed = True
+
+            if old_owner_build in content:
+                content = content.replace(old_owner_build, new_owner_build)
+                changed = True
+
+            if old_owner_cached in content:
+                content = content.replace(old_owner_cached, new_owner_cached)
+                changed = True
+
+            if old_xtest in content:
+                content = content.replace(old_xtest, new_xtest)
                 changed = True
 
             if changed:
