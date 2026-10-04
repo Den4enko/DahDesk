@@ -517,14 +517,14 @@ _install_rust_wl_clipboard() {
         dnf install -y --setopt=install_weak_deps=False --nodocs cargo rust || return 0
         _INSTALLED_CARGO=true
     fi
-    CARGO_HOME="$_CARGO_HOME" cargo install --root /usr wl-clipboard-rs-tools \
+    CARGO_HOME="$_CARGO_HOME" cargo install --force --root /usr wl-clipboard-rs-tools \
         2>&1 | tail -5 || true
     rm -rf "$_CARGO_HOME"
     if "$_INSTALLED_CARGO"; then
         dnf remove -y cargo rust 2>/dev/null || true
     fi
-    if [ -x /usr/bin/wl-copy ]; then
-        echo "Rust wl-clipboard installed successfully."
+    if wl-copy --version 2>&1 | grep -qE "^wl-copy [0-9]"; then
+        echo "Rust wl-clipboard installed successfully ($(wl-copy --version 2>&1 | head -n 1))."
     else
         echo "Warning: Rust wl-clipboard build failed; keeping C version."
     fi
