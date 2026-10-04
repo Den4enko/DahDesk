@@ -11,7 +11,7 @@ echo "  DahDesk - Updating System Packages & DahDesk"
 echo "=================================================="
 
 echo "Running system package updates..."
-dnf update -y --disablerepo=fedora-cisco-openh264
+dnf update -y
 
 REPO_URL="${SELKIES_REPO_URL:-https://raw.githubusercontent.com/Den4enko/DahDesk/main}"
 echo ""

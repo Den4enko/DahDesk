@@ -500,12 +500,12 @@ case "$DISTRO" in
         fi
 
         echo "Installing distribution and desktop packages..."
-        dnf install -y --disablerepo=fedora-cisco-openh264 --setopt=install_weak_deps=False --nodocs --skip-unavailable --allowerasing "${BASE_PKGS[@]}"
+        dnf install -y --setopt=install_weak_deps=False --nodocs --skip-unavailable --allowerasing "${BASE_PKGS[@]}"
 
         if [ "$PROFILE" = "full" ]; then
             echo "Installing complete Fedora KDE Desktop group..."
-            dnf group install -y --disablerepo=fedora-cisco-openh264 --setopt=install_weak_deps=False kde-desktop || true
-            dnf install -y --disablerepo=fedora-cisco-openh264 --setopt=install_weak_deps=False \
+            dnf group install -y --setopt=install_weak_deps=False kde-desktop || true
+            dnf install -y --setopt=install_weak_deps=False \
                 plasma-discover-packagekit flatpak plasma-discover-flatpak \
                 chromium || true
         fi
@@ -1392,7 +1392,7 @@ echo "  DahDesk - Updating System Packages & DahDesk"
 echo "=================================================="
 
 echo "Running system package updates..."
-dnf update -y --disablerepo=fedora-cisco-openh264
+dnf update -y
 
 REPO_URL="${SELKIES_REPO_URL:-https://raw.githubusercontent.com/Den4enko/DahDesk/main}"
 echo ""
