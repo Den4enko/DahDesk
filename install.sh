@@ -135,12 +135,14 @@ fi
 
 # Detect GPU availability and vendor
 DETECTED_GPU=""
+GPU_VENDOR=""
 GPU_FOUND=false
 
 detect_gpu() {
     # 1. Check NVIDIA device nodes
     if compgen -G "/dev/nvidia*" >/dev/null 2>&1; then
         GPU_FOUND=true
+        GPU_VENDOR="nvidia"
         if [ -f /proc/driver/nvidia/version ]; then
             DETECTED_GPU="NVIDIA ($(head -n 1 /proc/driver/nvidia/version 2>/dev/null | awk '{print $1, $8}'))"
         elif command -v nvidia-smi &>/dev/null; then
@@ -162,23 +164,46 @@ detect_gpu() {
                 fi
             done
             case "$vendor_id" in
-                0x8086) DETECTED_GPU="Intel Graphics (DRI/VA-API)" ;;
-                0x1002) DETECTED_GPU="AMD Radeon (DRI/VA-API)" ;;
-                0x10de) DETECTED_GPU="NVIDIA GPU (DRI)" ;;
-                0x1af4) DETECTED_GPU="VirtIO GPU (Virtual/DRI)" ;;
-                0x15ad) DETECTED_GPU="VMware SVGA (Virtual/DRI)" ;;
+                0x8086)
+                    DETECTED_GPU="Intel Graphics (DRI/VA-API)"
+                    GPU_VENDOR="intel"
+                    ;;
+                0x1002)
+                    DETECTED_GPU="AMD Radeon (DRI/VA-API)"
+                    GPU_VENDOR="amd"
+                    ;;
+                0x10de)
+                    DETECTED_GPU="NVIDIA GPU (DRI)"
+                    GPU_VENDOR="nvidia"
+                    ;;
+                0x1af4)
+                    DETECTED_GPU="VirtIO GPU (Virtual/DRI)"
+                    GPU_VENDOR="virtual"
+                    ;;
+                0x15ad)
+                    DETECTED_GPU="VMware SVGA (Virtual/DRI)"
+                    GPU_VENDOR="virtual"
+                    ;;
                 *)
                     if command -v lspci &>/dev/null; then
                         local pci_gpu
                         pci_gpu=$(lspci 2>/dev/null | grep -iE 'vga|3d|display' | head -n 1 | sed 's/.*: //')
                         if [ -n "$pci_gpu" ]; then
                             DETECTED_GPU="$pci_gpu"
+                            if echo "$pci_gpu" | grep -iq intel; then
+                                GPU_VENDOR="intel"
+                            elif echo "$pci_gpu" | grep -iqE "amd|radeon|ati"; then
+                                GPU_VENDOR="amd"
+                            elif echo "$pci_gpu" | grep -iq nvidia; then
+                                GPU_VENDOR="nvidia"
+                            fi
                         fi
                     fi
                     if [ -z "$DETECTED_GPU" ]; then
                         local dri_nodes
                         dri_nodes=$(ls -m /dev/dri/ 2>/dev/null | tr -d '\n')
                         DETECTED_GPU="DRM/DRI device (/dev/dri: ${dri_nodes})"
+                        GPU_VENDOR="generic"
                     fi
                     ;;
             esac
@@ -194,6 +219,7 @@ detect_gpu() {
     if [ "$GPU_FOUND" = false ] && compgen -G "/sys/class/drm/card*" >/dev/null 2>&1; then
         GPU_FOUND=true
         DETECTED_GPU="DRM Display Device (/sys/class/drm)"
+        GPU_VENDOR="generic"
     fi
 }
 
@@ -203,9 +229,11 @@ if [ -n "$GPU_OVERRIDE" ]; then
     if [ "$GPU_OVERRIDE" = "true" ]; then
         GPU_ENABLED=true
         [ -z "$DETECTED_GPU" ] && DETECTED_GPU="Forced by --gpu"
+        [ -z "$GPU_VENDOR" ] && GPU_VENDOR="generic"
     else
         GPU_ENABLED=false
         DETECTED_GPU="Disabled by --no-gpu"
+        GPU_VENDOR=""
     fi
 else
     GPU_ENABLED="$GPU_FOUND"
@@ -406,12 +434,12 @@ case "$DISTRO" in
             dolphin plasma-systemsettings plasma-pa plasma-nm kwrite ark gwenview spectacle kdialog
         )
         if [ "$GPU_ENABLED" = true ]; then
-            echo "Enabling RPM Fusion repositories for hardware video codecs (VA-API freeworld)..."
+            echo "Enabling RPM Fusion repositories for hardware video codecs..."
             dnf install -y --nogpgcheck \
                 "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
                 "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm" 2>/dev/null || true
 
-            echo "Installing Mesa drivers, VA-API acceleration, and freeworld video codecs..."
+            echo "Configuring GPU acceleration packages for ${DETECTED_GPU}..."
             BASE_PKGS+=(
                 mesa-dri-drivers
                 mesa-vulkan-drivers
@@ -426,19 +454,40 @@ case "$DISTRO" in
                 gstreamer1-plugins-ugly-free
                 gstreamer1-vaapi
             )
-        fi
-        dnf install -y --disablerepo=fedora-cisco-openh264 --setopt=install_weak_deps=False --nodocs --skip-unavailable "${BASE_PKGS[@]}"
 
-        if [ "$GPU_ENABLED" = true ] && [ "$ARCH" = "x86_64" ]; then
-            # Install optional freeworld drivers separately (skip any not available in repos)
-            dnf install -y --disablerepo=fedora-cisco-openh264 --setopt=install_weak_deps=False --nodocs --skip-unavailable \
-                mesa-va-drivers-freeworld \
-                mesa-vdpau-drivers-freeworld \
-                intel-media-driver \
-                libva-intel-driver \
-                libva-nvidia-driver 2>/dev/null || true
-            dnf swap -y mesa-va-drivers mesa-va-drivers-freeworld --allowerasing 2>/dev/null || true
+            # Vendor-targeted hardware video decoding drivers
+            if [ "$ARCH" = "x86_64" ]; then
+                case "$GPU_VENDOR" in
+                    intel)
+                        BASE_PKGS+=(
+                            intel-media-driver
+                            libva-intel-driver
+                        )
+                        ;;
+                    nvidia)
+                        BASE_PKGS+=(
+                            libva-nvidia-driver
+                        )
+                        ;;
+                    amd)
+                        # AMD uses radeonsi_drv_video.so (part of mesa-dri-drivers on F44+).
+                        # On older Fedora releases, mesa-va-drivers-freeworld provides hardware decoding.
+                        BASE_PKGS+=(
+                            mesa-va-drivers-freeworld
+                        )
+                        ;;
+                    *)
+                        BASE_PKGS+=(
+                            mesa-va-drivers-freeworld
+                            intel-media-driver
+                        )
+                        ;;
+                esac
+            fi
         fi
+
+        echo "Installing distribution and desktop packages..."
+        dnf install -y --disablerepo=fedora-cisco-openh264 --setopt=install_weak_deps=False --nodocs --skip-unavailable --allowerasing "${BASE_PKGS[@]}"
 
         if [ "$PROFILE" = "full" ]; then
             echo "Installing complete Fedora KDE Desktop group..."
