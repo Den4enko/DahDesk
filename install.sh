@@ -694,7 +694,7 @@ else
 fi
 
 # Configure Konsole shortcut for Ctrl+V paste (allows universal typing/paste fallback in terminal)
-for kdir in "${USER_HOME}/.local/share/kxmlgui5/konsole" "${USER_HOME}/.config/kxmlgui5/konsole"; do
+for kdir in "${USER_HOME}/.local/share/kxmlgui6/konsole" "${USER_HOME}/.config/kxmlgui6/konsole"; do
     mkdir -p "${kdir}"
     if [ ! -f "${kdir}/konsoleui.rc" ]; then
         cat << 'EOF' > "${kdir}/konsoleui.rc"
@@ -806,8 +806,8 @@ def patch_selkies_input():
                     return False
 
                 # Fast, reliable Ctrl+V chord (~60ms total chord window)
-                ctrl_keysym = 0xFFE3
-                v_keysym = 0x0076
+                ctrl_keysym = 0xFFE1  # Shift (Shift+Insert paste works in terminals too)
+                v_keysym = 0xFF63  # Insert
                 await asyncio.sleep(0.01)
                 await self.send_x11_keypress(ctrl_keysym, down=True)
                 await asyncio.sleep(0.02)
@@ -1129,6 +1129,10 @@ CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
                 content = content.replace(old_timeout, new_timeout)
                 changed = True
 
+            if "ctrl_keysym = 0xFFE3" in content and "_restore_after_idle" in content:
+                content = content.replace("ctrl_keysym = 0xFFE3", "ctrl_keysym = 0xFFE1").replace("v_keysym = 0x0076", "v_keysym = 0xFF63")
+                changed = True
+
             if "_build_cyrillic_qwerty_map" not in content and "CYRILLIC_TO_QWERTY_KEYSYM = {" in content:
                 idx = content.find("CYRILLIC_TO_QWERTY_KEYSYM = {")
                 end_idx = content.find("}", idx) + 1
@@ -1188,7 +1192,7 @@ CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
 </gui>
 """
     # System-wide
-    for sys_dir in ["/etc/xdg/kxmlgui5/konsole", "/etc/xdg/ui"]:
+    for sys_dir in ["/etc/xdg/kxmlgui6/konsole", "/etc/xdg/ui"]:
         try:
             os.makedirs(sys_dir, exist_ok=True)
             kfile = os.path.join(sys_dir, "konsoleui.rc")
@@ -1202,7 +1206,7 @@ CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
     try:
         for u in pwd.getpwall():
             if u.pw_uid >= 1000 and os.path.isdir(u.pw_dir):
-                for sub in [".local/share/kxmlgui5/konsole", ".config/kxmlgui5/konsole"]:
+                for sub in [".local/share/kxmlgui6/konsole", ".config/kxmlgui6/konsole"]:
                     user_kdir = os.path.join(u.pw_dir, sub)
                     try:
                         os.makedirs(user_kdir, exist_ok=True)
