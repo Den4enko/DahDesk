@@ -1,9 +1,35 @@
-#!/usr/bin/env python3
 import glob
 import os
 import pwd
 import re
 import sys
+
+def patch_selkies_core_js():
+    patterns = [
+        "/opt/selkies/lib/python*/site-packages/selkies/selkies_web/src/selkies-core.js",
+        "/opt/selkies/lib64/python*/site-packages/selkies/selkies_web/src/selkies-core.js",
+        "/usr/lib/python*/site-packages/selkies/selkies_web/src/selkies-core.js",
+        "/usr/lib64/python*/site-packages/selkies/selkies_web/src/selkies-core.js",
+        "/usr/local/lib/python*/site-packages/selkies/selkies_web/src/selkies-core.js",
+    ]
+    target_files = []
+    for p in patterns:
+        target_files.extend(glob.glob(p))
+
+    old_timeout = "this._altGrTimeout=setTimeout(()=>{this._altGrArmed=!1,this._sendKeyEvent(A.XK_Control_L,`ControlLeft`,!0)},100)"
+    new_timeout = "this._altGrTimeout=setTimeout(()=>{this._altGrArmed=!1,this._sendKeyEvent(A.XK_Control_L,`ControlLeft`,!0)},20)"
+
+    for file_path in target_files:
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            if old_timeout in content:
+                content = content.replace(old_timeout, new_timeout)
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                print(f"[selkies-patch-input] Applied AltGr/Ctrl timing fix to: {file_path}")
+        except Exception as e:
+            print(f"[selkies-patch-input] Warning: failed patching {file_path}: {e}", file=sys.stderr)
 
 def patch_selkies_input():
     patterns = [
@@ -92,6 +118,105 @@ def patch_selkies_input():
         re.DOTALL
     )
 
+    cyr_builder = """
+def _build_cyrillic_qwerty_map():
+    key_pairs = [
+        ('q', 'й'), ('w', 'ц'), ('e', 'у'), ('r', 'к'), ('t', 'е'),
+        ('y', 'н'), ('u', 'г'), ('i', 'ш'), ('o', 'щ'), ('p', 'з'),
+        ('[', 'х'), (']', 'ъ'), (']', 'ї'),
+        ('a', 'ф'), ('s', 'ы'), ('s', 'і'), ('d', 'в'), ('f', 'а'),
+        ('g', 'п'), ('h', 'р'), ('j', 'о'), ('k', 'л'), ('l', 'д'),
+        (';', 'ж'), ("'", 'э'), ("'", 'є'),
+        ('z', 'я'), ('x', 'ч'), ('c', 'с'), ('v', 'м'), ('b', 'и'),
+        ('n', 'т'), ('m', 'ь'), (',', 'б'), ('.', 'ю'),
+        ('`', 'ё'), ('\\\\', 'ґ')
+    ]
+    x11_legacy = {
+        'а': 0x06C1, 'б': 0x06C2, 'в': 0x06D7, 'г': 0x06C7, 'д': 0x06C4,
+        'е': 0x06C5, 'ё': 0x06A3, 'ж': 0x06D6, 'з': 0x06DA, 'и': 0x06C9,
+        'й': 0x06CA, 'к': 0x06CB, 'л': 0x06CC, 'м': 0x06CD, 'н': 0x06CE,
+        'о': 0x06CF, 'п': 0x06D0, 'р': 0x06D2, 'с': 0x06D3, 'т': 0x06D4,
+        'у': 0x06D5, 'ф': 0x06C6, 'х': 0x06C8, 'ц': 0x06C3, 'ч': 0x06DE,
+        'ш': 0x06DB, 'щ': 0x06DD, 'ъ': 0x06DF, 'ы': 0x06D9, 'ь': 0x06D8,
+        'э': 0x06DC, 'ю': 0x06C0, 'я': 0x06D1,
+        'є': 0x06A4, 'і': 0x06A6, 'ї': 0x06A7, 'ґ': 0x06AD
+    }
+    m = {}
+    for latin, cyr in key_pairs:
+        lat_lower = ord(latin.lower())
+        lat_upper = ord(latin.upper())
+        m[0x01000000 | ord(cyr.lower())] = lat_lower
+        m[0x01000000 | ord(cyr.upper())] = lat_upper
+        m[ord(cyr.lower())] = lat_lower
+        m[ord(cyr.upper())] = lat_upper
+        if cyr in x11_legacy:
+            leg_lower = x11_legacy[cyr]
+            leg_upper = leg_lower + 0x20 if leg_lower >= 0x06C0 else leg_lower - 0x10
+            m[leg_lower] = lat_lower
+            m[leg_upper] = lat_upper
+    return m
+
+CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
+"""
+
+    old_block_1 = """                    if msg_type == "kd":
+                        if (is_unicode_fallback and not native_inject()
+                                and (not self.active_modifiers
+                                     or self._has_separate_app_compositor())):"""
+
+    new_block_1 = """                    if msg_type == "kd":
+                        if (is_unicode_fallback and not native_inject()
+                                and not (self.active_modifiers & self.ACTION_MODIFIER_KEYSYMS)
+                                and (not self.active_modifiers
+                                     or self._has_separate_app_compositor())):"""
+
+    old_block_2 = """                        if (not is_unicode_fallback
+                                and keysym is not None and not native_inject()
+                                and keysym not in self.MODIFIER_KEYSYMS
+                                and not ((self.active_modifiers & self.ACTION_MODIFIER_KEYSYMS)
+                                         and keysym in CYRILLIC_TO_QWERTY_KEYSYM)):
+                            char_to_type = keysym_to_character(keysym)
+                            if char_to_type is not None:
+                                owner = await self._ensure_wayland_keymap_owner()
+                                if owner is None or not owner.resolves(keysym):
+                                    unicode_buffer.append(char_to_type)
+                                    self._route_key_as_text(keysym)
+                                    continue"""
+
+    new_block_2 = """                        if (not is_unicode_fallback
+                                and keysym is not None and not native_inject()
+                                and keysym not in self.MODIFIER_KEYSYMS
+                                and not (self.active_modifiers & self.ACTION_MODIFIER_KEYSYMS)):
+                            char_to_type = keysym_to_character(keysym)
+                            if char_to_type is not None:
+                                owner = await self._ensure_wayland_keymap_owner()
+                                level_match = False
+                                if owner is not None and owner.resolves(keysym):
+                                    resolved = getattr(owner, '_map', {}).get(keysym)
+                                    if resolved is not None:
+                                        _, lvl = resolved
+                                        shift_needed = bool(lvl & 1)
+                                        shift_held = bool(self.active_modifiers & {0xFFE1, 0xFFE2})
+                                        altgr_needed = bool(lvl & 2)
+                                        altgr_held = bool(self.active_modifiers & {0xFE03, 0xFF7E, 65027})
+                                        level_match = (shift_needed == shift_held and altgr_needed == altgr_held)
+                                if not level_match:
+                                    unicode_buffer.append(char_to_type)
+                                    self._route_key_as_text(keysym)
+                                    continue"""
+
+    old_block_3 = """                        if keysym in self.MODIFIER_KEYSYMS:
+                            self.active_modifiers.add(keysym)
+
+                        await self.send_x11_keypress(keysym, down=True)"""
+
+    new_block_3 = """                        if keysym in self.MODIFIER_KEYSYMS:
+                            self.active_modifiers.add(keysym)
+
+                        await self.send_x11_keypress(keysym, down=True)
+                        if keysym in self.ACTION_MODIFIER_KEYSYMS:
+                            await asyncio.sleep(0.015)"""
+
     for file_path in target_files:
         try:
             with open(file_path, "r", encoding="utf-8") as f:
@@ -104,6 +229,24 @@ def patch_selkies_input():
 
             if old_timeout in content:
                 content = content.replace(old_timeout, new_timeout)
+                changed = True
+
+            if "_build_cyrillic_qwerty_map" not in content and "CYRILLIC_TO_QWERTY_KEYSYM = {" in content:
+                idx = content.find("CYRILLIC_TO_QWERTY_KEYSYM = {")
+                end_idx = content.find("}", idx) + 1
+                content = content[:end_idx] + "\n" + cyr_builder + content[end_idx:]
+                changed = True
+
+            if "not (self.active_modifiers & self.ACTION_MODIFIER_KEYSYMS)" not in content and old_block_1 in content:
+                content = content.replace(old_block_1, new_block_1)
+                changed = True
+
+            if "level_match = False" not in content and old_block_2 in content:
+                content = content.replace(old_block_2, new_block_2)
+                changed = True
+
+            if "if keysym in self.ACTION_MODIFIER_KEYSYMS:" not in content and old_block_3 in content:
+                content = content.replace(old_block_3, new_block_3)
                 changed = True
 
             if changed:
@@ -171,7 +314,6 @@ def patch_selkies_session():
 
             changed = False
 
-            # 1. Update desktop() to record the spawned desktop session process
             old_spawn = 'self.spawn(bus + shlex.split(entry["Exec"]), env=env)'
             new_spawn = 'proc = self.spawn(bus + shlex.split(entry["Exec"]), env=env)\n        self.desktop_proc = proc\n        return proc'
 
@@ -179,7 +321,6 @@ def patch_selkies_session():
                 content = content.replace(old_spawn, new_spawn)
                 changed = True
 
-            # 2. Update main loop to watch desktop session process and exit for auto-restart when user logs out
             old_loop = '''        while session.selkies.poll() is None and not stopping:
             time.sleep(0.5)'''
 
@@ -202,5 +343,6 @@ def patch_selkies_session():
             print(f"[selkies-patch-input] Warning: failed patching session {file_path}: {e}", file=sys.stderr)
 
 if __name__ == "__main__":
+    patch_selkies_core_js()
     patch_selkies_input()
     patch_selkies_session()
