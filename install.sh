@@ -1552,6 +1552,17 @@ LAST_UPDATED="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 EOF
 chmod 0600 "$CONFIG_FILE"
 
+# Configure window button layout for GTK applications (minimize, maximize, close)
+if command -v gsettings &>/dev/null; then
+    gsettings set org.gnome.desktop.wm.preferences button-layout ':minimize,maximize,close' 2>/dev/null || true
+    if [ -n "${DESKTOP_USER}" ] && id -u "${DESKTOP_USER}" &>/dev/null; then
+        if command -v dbus-run-session &>/dev/null; then
+            sudo -u "${DESKTOP_USER}" dbus-run-session -- gsettings set org.gnome.desktop.wm.preferences button-layout ':minimize,maximize,close' 2>/dev/null || true
+        fi
+        sudo -u "${DESKTOP_USER}" gsettings set org.gnome.desktop.wm.preferences button-layout ':minimize,maximize,close' 2>/dev/null || true
+    fi
+fi
+
 echo "=================================================="
 echo "  DahDesk Installation Complete!"
 echo "=================================================="
