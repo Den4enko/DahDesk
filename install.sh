@@ -521,28 +521,30 @@ case "$DISTRO" in
         ;;
 esac
 
-echo "Installing Rust wl-clipboard (wl-clipboard-rs-tools) for improved clipboard performance..."
+echo "Checking Rust wl-clipboard (wl-clipboard-rs-tools)..."
 _install_rust_wl_clipboard() {
+    if [ -x /usr/local/bin/wl-copy ] && /usr/local/bin/wl-copy --version 2>&1 | grep -qE "^wl-copy [0-9]"; then
+        echo "Rust wl-clipboard is already installed ($( /usr/local/bin/wl-copy --version 2>&1 | head -n 1 ))."
+        cp -f /usr/local/bin/wl-copy /usr/local/bin/wl-paste /usr/bin/ 2>/dev/null || true
+        return 0
+    fi
+
+    echo "Building Rust wl-clipboard (wl-clipboard-rs-tools) for improved clipboard performance..."
     local _CARGO_HOME="/root/.cargo-wl-tmp"
-    local _RUSTUP_HOME="/root/.rustup-wl-tmp"
-    local _INSTALLED_CARGO=false
     if ! command -v cargo &>/dev/null; then
+        echo "Installing Rust and Cargo toolchain..."
         dnf install -y --setopt=install_weak_deps=False --nodocs cargo rust || return 0
-        _INSTALLED_CARGO=true
     fi
     CARGO_HOME="$_CARGO_HOME" cargo install --force --root /usr/local wl-clipboard-rs-tools \
         2>&1 | tail -5 || true
     rm -rf "$_CARGO_HOME"
-    if "$_INSTALLED_CARGO"; then
-        dnf remove -y cargo rust 2>/dev/null || true
-    fi
     if [ -x /usr/local/bin/wl-copy ]; then
         cp -f /usr/local/bin/wl-copy /usr/local/bin/wl-paste /usr/bin/ 2>/dev/null || true
     fi
-    if wl-copy --version 2>&1 | grep -qE "^wl-copy [0-9]"; then
-        echo "Rust wl-clipboard installed successfully ($(wl-copy --version 2>&1 | head -n 1))."
+    if [ -x /usr/bin/wl-copy ] && /usr/bin/wl-copy --version 2>&1 | grep -qE "^wl-copy [0-9]"; then
+        echo "Rust wl-clipboard installed successfully ($( /usr/bin/wl-copy --version 2>&1 | head -n 1 ))."
     else
-        echo "Warning: Rust wl-clipboard build failed; keeping C version."
+        echo "Warning: Rust wl-clipboard build failed; keeping system version."
     fi
 }
 _install_rust_wl_clipboard
