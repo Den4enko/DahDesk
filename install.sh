@@ -1170,7 +1170,7 @@ sync_component "systemd/start-selkies.sh" "/usr/local/bin/start-selkies.sh"
 # If invoked standalone (not inside a running DNF transaction), run full GitHub install.sh update
 if ! (pgrep -x dnf >/dev/null 2>&1 || pgrep -x dnf5 >/dev/null 2>&1); then
     echo "[selkies] Checking for and applying full DahDesk updates from GitHub..."
-    curl -fsSL --max-time 15 "${REPO_URL}/install.sh" 2>/dev/null | bash -s -- -y 2>/dev/null || true
+    curl -fsSL --max-time 15 "${REPO_URL}/install.sh" | bash -s -- -y || true
 fi
 
 # Ensure Selkies non-US keyboard input patch is intact (fixes Cyrillic/Ukrainian typing without clipboard conflicts)
@@ -1297,11 +1297,6 @@ LAST_UPDATED="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 EOF
 chmod 0600 "$CONFIG_FILE"
 
-if pidof systemd &>/dev/null; then
-    systemctl start "user@${USER_ID}.service" 2>/dev/null || true
-    systemctl restart selkies
-fi
-
 echo "=================================================="
 echo "  DahDesk Installation Complete!"
 echo "=================================================="
@@ -1316,3 +1311,37 @@ fi
 echo "HTTP Auth:    None (Direct Stream Access)"
 echo "Updater:      sudo selkies-update"
 echo "=================================================="
+
+# Function to detect if script was invoked from within an active graphical desktop / terminal session
+is_in_gui_session() {
+    [ -n "${WAYLAND_DISPLAY:-}" ] && return 0
+    [ -n "${DISPLAY:-}" ] && return 0
+    local p=$$
+    while [ "$p" -gt 1 ] 2>/dev/null; do
+        local comm
+        comm=$(cat "/proc/$p/comm" 2>/dev/null || true)
+        case "$comm" in
+            konsole*|ptyxis*|gnome-terminal*|xterm*|alacritty*|kitty*|foot*|kwin*|plasma*|selkies*)
+                return 0
+                ;;
+        esac
+        p=$(awk '{print $4}' "/proc/$p/stat" 2>/dev/null || echo 1)
+    done
+    return 1
+}
+
+if pidof systemd &>/dev/null; then
+    systemctl start "user@${USER_ID}.service" 2>/dev/null || true
+    if systemctl is-active --quiet selkies 2>/dev/null; then
+        if is_in_gui_session; then
+            echo ""
+            echo "Notice: Active desktop session detected."
+            echo "DahDesk will reload in 3 seconds to apply all updates..."
+            ( nohup bash -c 'sleep 3 && systemctl restart selkies' >/dev/null 2>&1 & )
+        else
+            systemctl restart selkies
+        fi
+    else
+        systemctl start selkies 2>/dev/null || true
+    fi
+fi
