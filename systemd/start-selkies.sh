@@ -16,6 +16,13 @@ if [ -x /usr/local/bin/selkies-patch-input ]; then
     /usr/local/bin/selkies-patch-input 2>/dev/null || true
 fi
 
+# Strip plasma-keyboard virtual keyboard settings from Fedora KDE profile to prevent input interception
+for rc in /usr/share/kde-settings/kde-profile/default/xdg/kwinrc /etc/xdg/kwinrc "${HOME}/.config/kwinrc"; do
+    if [ -f "$rc" ]; then
+        sed -i -e '/^InputMethod/d' -e '/^VirtualKeyboardEnabled/d' "$rc" 2>/dev/null || true
+    fi
+done
+
 for i in {1..10}; do
     [ -S "${PULSE_SERVER#unix:}" ] && break
     sleep 0.5

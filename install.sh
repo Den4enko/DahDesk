@@ -657,6 +657,13 @@ EOF
     chown "${USER_ID}:${USER_GROUP}" "${USER_HOME}/.config/kwinrulesrc"
 fi
 
+# Strip plasma-keyboard virtual keyboard settings from Fedora KDE profile to prevent input interception
+for rc in /usr/share/kde-settings/kde-profile/default/xdg/kwinrc /etc/xdg/kwinrc "${USER_HOME}/.config/kwinrc"; do
+    if [ -f "$rc" ]; then
+        sed -i -e '/^InputMethod/d' -e '/^VirtualKeyboardEnabled/d' "$rc" 2>/dev/null || true
+    fi
+done
+
 # Configure keyboard layout (Universal client-sync or custom XKB)
 mkdir -p "${USER_HOME}/.config"
 if [ "${KEYBOARD_LAYOUTS}" != "us" ]; then
@@ -726,18 +733,36 @@ def patch_selkies_core_js():
     for p in patterns:
         target_files.extend(glob.glob(p))
 
-    old_timeout = "this._altGrTimeout=setTimeout(()=>{this._altGrArmed=!1,this._sendKeyEvent(A.XK_Control_L,`ControlLeft`,!0)},100)"
-    new_timeout = "this._altGrTimeout=setTimeout(()=>{this._altGrArmed=!1,this._sendKeyEvent(A.XK_Control_L,`ControlLeft`,!0)},20)"
+    old_arms = [
+        "this._altGrTimeout=setTimeout(()=>{this._altGrArmed=!1,this._sendKeyEvent(A.XK_Control_L,`ControlLeft`,!0)},20);return",
+        "this._altGrTimeout=setTimeout(()=>{this._altGrArmed=!1,this._sendKeyEvent(A.XK_Control_L,`ControlLeft`,!0)},100);return",
+        "this._altGrTimeout=setTimeout(()=>{this._altGrArmed=!1,this._sendKeyEvent(A.XK_Control_L,`ControlLeft`,!0)},20)",
+        "this._altGrTimeout=setTimeout(()=>{this._altGrArmed=!1,this._sendKeyEvent(A.XK_Control_L,`ControlLeft`,!0)},100)",
+    ]
+    new_arm = "this._sendKeyEvent(A.XK_Control_L,`ControlLeft`,!0);return"
+
+    old_altright = "r===`AltRight`&&t.timeStamp-this._altGrCtrlTime<50?i=A.XK_ISO_Level3_Shift:this._sendKeyEvent(A.XK_Control_L,`ControlLeft`,!0)"
+    new_altright = "r===`AltRight`&&t.timeStamp-this._altGrCtrlTime<50?(this._sendKeyEvent(A.XK_Control_L,`ControlLeft`,!1),i=A.XK_ISO_Level3_Shift):null"
 
     for file_path in target_files:
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
-            if old_timeout in content:
-                content = content.replace(old_timeout, new_timeout)
+
+            changed = False
+            for old_arm in old_arms:
+                if old_arm in content:
+                    content = content.replace(old_arm, new_arm)
+                    changed = True
+
+            if old_altright in content:
+                content = content.replace(old_altright, new_altright)
+                changed = True
+
+            if changed:
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(content)
-                print(f"[selkies-patch-input] Applied AltGr/Ctrl timing fix to: {file_path}")
+                print(f"[selkies-patch-input] Applied AltGr/Ctrl immediate dispatch fix to: {file_path}")
         except Exception as e:
             print(f"[selkies-patch-input] Warning: failed patching {file_path}: {e}", file=sys.stderr)
 
@@ -905,7 +930,7 @@ CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
                                     self._route_key_as_text(keysym)
                                     continue"""
 
-    old_level_match_block = """                        if (not is_unicode_fallback
+    level_match_block = """                        if (not is_unicode_fallback
                                 and keysym is not None and not native_inject()
                                 and keysym not in self.MODIFIER_KEYSYMS
                                 and not (self.active_modifiers & self.ACTION_MODIFIER_KEYSYMS)):
@@ -937,7 +962,7 @@ CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
 
                         await self.send_x11_keypress(keysym, down=True)
                         if keysym in self.ACTION_MODIFIER_KEYSYMS:
-                            await asyncio.sleep(0.02)"""
+                            await asyncio.sleep(0.005)"""
 
     old_wl_press_release = '''        lifted = self._held_conflicts(set(mods)) if neutralize else []
         for m in lifted:
@@ -1113,17 +1138,20 @@ CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
                 content = content.replace(old_block_1, new_block_1)
                 changed = True
 
-            if old_level_match_block in content:
-                content = content.replace(old_level_match_block, clean_block_2)
+            if clean_block_2 in content:
+                content = content.replace(clean_block_2, level_match_block)
                 changed = True
             elif old_block_2 in content:
-                content = content.replace(old_block_2, clean_block_2)
+                content = content.replace(old_block_2, level_match_block)
                 changed = True
 
-            if "await asyncio.sleep(0.015)" in content:
-                content = content.replace("await asyncio.sleep(0.015)", "await asyncio.sleep(0.02)")
+            if "await asyncio.sleep(0.02)" in content:
+                content = content.replace("await asyncio.sleep(0.02)", "await asyncio.sleep(0.005)")
                 changed = True
-            elif "await asyncio.sleep(0.02)" not in content and old_block_3 in content:
+            elif "await asyncio.sleep(0.015)" in content:
+                content = content.replace("await asyncio.sleep(0.015)", "await asyncio.sleep(0.005)")
+                changed = True
+            elif "await asyncio.sleep(0.005)" not in content and old_block_3 in content:
                 content = content.replace(old_block_3, new_block_3)
                 changed = True
 
@@ -1236,10 +1264,36 @@ def patch_selkies_session():
         except Exception as e:
             print(f"[selkies-patch-input] Warning: failed patching session {file_path}: {e}", file=sys.stderr)
 
+def patch_kwin_settings():
+    kwinrc_paths = [
+        "/usr/share/kde-settings/kde-profile/default/xdg/kwinrc",
+        "/etc/xdg/kwinrc",
+    ]
+    try:
+        for u in pwd.getpwall():
+            if u.pw_uid >= 1000 and os.path.isdir(u.pw_dir):
+                kwinrc_paths.append(os.path.join(u.pw_dir, ".config/kwinrc"))
+    except Exception:
+        pass
+
+    for p in kwinrc_paths:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                new_lines = [l for l in lines if not l.startswith("InputMethod") and not l.startswith("VirtualKeyboardEnabled")]
+                if len(new_lines) != len(lines):
+                    with open(p, "w", encoding="utf-8") as f:
+                        f.writelines(new_lines)
+                    print(f"[selkies-patch-input] Stripped plasma-keyboard settings from: {p}")
+            except Exception as e:
+                pass
+
 if __name__ == "__main__":
     patch_selkies_core_js()
     patch_selkies_input()
     patch_selkies_session()
+    patch_kwin_settings()
 EOF
 chmod +x /usr/local/bin/selkies-patch-input
 /usr/local/bin/selkies-patch-input || true
@@ -1262,6 +1316,13 @@ mkdir -pm1777 /tmp/.X11-unix 2>/dev/null || true
 if [ -x /usr/local/bin/selkies-patch-input ]; then
     /usr/local/bin/selkies-patch-input 2>/dev/null || true
 fi
+
+# Strip plasma-keyboard virtual keyboard settings from Fedora KDE profile to prevent input interception
+for rc in /usr/share/kde-settings/kde-profile/default/xdg/kwinrc /etc/xdg/kwinrc "${HOME}/.config/kwinrc"; do
+    if [ -f "$rc" ]; then
+        sed -i -e '/^InputMethod/d' -e '/^VirtualKeyboardEnabled/d' "$rc" 2>/dev/null || true
+    fi
+done
 
 for i in {1..10}; do
     [ -S "${PULSE_SERVER#unix:}" ] && break
