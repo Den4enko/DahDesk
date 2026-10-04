@@ -709,9 +709,9 @@ EOF
 done
 chown -R "${USER_ID}:${USER_GROUP}" "${USER_HOME}/.local" "${USER_HOME}/.config"
 
-# Disable fwupd service in headless/container environments (crashes without EFI/hardware access)
+# Disable fwupd and power management sleep targets in headless/container environments
 systemctl disable fwupd.service 2>/dev/null || true
-systemctl mask fwupd.service 2>/dev/null || true
+systemctl mask fwupd.service sleep.target suspend.target hibernate.target hybrid-sleep.target 2>/dev/null || true
 
 echo "Deploying system services and updater..."
 cat << 'EOF' > /usr/local/bin/selkies-patch-input
@@ -1374,6 +1374,9 @@ echo "[selkies] Running post-update checks..."
 
 # Ensure kwin capabilities remain stripped for unprivileged containers
 setcap -r /usr/bin/kwin_wayland 2>/dev/null || setcap -r /usr/sbin/kwin_wayland 2>/dev/null || true
+
+# Ensure power management sleep targets remain masked in headless/container environments
+systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target 2>/dev/null || true
 
 # Verify and maintain device permissions
 if [ -d /dev/dri ]; then

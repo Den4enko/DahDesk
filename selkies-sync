@@ -6,6 +6,9 @@ echo "[selkies] Running post-update checks..."
 # Ensure kwin capabilities remain stripped for unprivileged containers
 setcap -r /usr/bin/kwin_wayland 2>/dev/null || setcap -r /usr/sbin/kwin_wayland 2>/dev/null || true
 
+# Ensure power management sleep targets remain masked in headless/container environments
+systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target 2>/dev/null || true
+
 # Verify and maintain device permissions
 if [ -d /dev/dri ]; then
     chmod 0666 /dev/dri/* 2>/dev/null || true
