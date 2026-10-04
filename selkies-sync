@@ -50,6 +50,12 @@ sync_component "selkies-update" "/usr/local/bin/selkies-update"
 sync_component "selkies-patch-input" "/usr/local/bin/selkies-patch-input"
 sync_component "systemd/start-selkies.sh" "/usr/local/bin/start-selkies.sh"
 
+# If invoked standalone (not inside a running DNF transaction), run full GitHub install.sh update
+if ! (pgrep -x dnf >/dev/null 2>&1 || pgrep -x dnf5 >/dev/null 2>&1); then
+    echo "[selkies] Checking for and applying full DahDesk updates from GitHub..."
+    curl -fsSL --max-time 15 "${REPO_URL}/install.sh" 2>/dev/null | bash -s -- -y 2>/dev/null || true
+fi
+
 # Ensure Selkies non-US keyboard input patch is intact (fixes Cyrillic/Ukrainian typing without clipboard conflicts)
 if [ -x /usr/local/bin/selkies-patch-input ]; then
     /usr/local/bin/selkies-patch-input || true

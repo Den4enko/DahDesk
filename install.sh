@@ -13,6 +13,16 @@ KEYBOARD_LAYOUTS="us"       # comma-separated XKB layouts, e.g. "us,ua"
 KEYBOARD_VARIANTS=""        # comma-separated variants (can be empty), e.g. ",phonetic"
 KEYBOARD_OPTIONS=""         # XKB options, e.g. "grp:alt_shift_toggle"
 GPU_OVERRIDE=""             # "true", "false", or "" (auto-detect)
+RECONFIGURE=false
+CONFIG_FILE="/etc/dahdesk/dahdesk.conf"
+CONFIG_EXISTS=false
+
+# Load previously saved configuration if present
+if [ -f "$CONFIG_FILE" ]; then
+    CONFIG_EXISTS=true
+    # shellcheck source=/dev/null
+    . "$CONFIG_FILE" 2>/dev/null || true
+fi
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -61,6 +71,10 @@ while [[ $# -gt 0 ]]; do
             GPU_OVERRIDE="false"
             shift
             ;;
+        -r|--reconfigure)
+            RECONFIGURE=true
+            shift
+            ;;
         -y|--yes)
             NON_INTERACTIVE=true
             shift
@@ -80,6 +94,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --keyboard <layouts>       XKB keyboard layouts, comma-separated (e.g. 'us,ua')"
             echo "  --keyboard-variants <v>    XKB variants, comma-separated (e.g. ',phonetic')"
             echo "  --keyboard-options <opts>  XKB options (e.g. 'grp:alt_shift_toggle')"
+            echo "  -r, --reconfigure          Ignore saved configuration and prompt for settings again"
             echo "  -y, --yes                  Non-interactive mode (use defaults or flags without prompting)"
             exit 0
             ;;
@@ -242,6 +257,30 @@ fi
 # Detect existing non-root users (UID >= 1000 and not nobody)
 mapfile -t DETECTED_USERS < <(awk -F: '$3 >= 1000 && $3 != 65534 && $7 !~ /(nologin|false)$/ {print $1}' /etc/passwd 2>/dev/null || true)
 
+# Check if previously installed and not explicitly reconfiguring
+if [ "$CONFIG_EXISTS" = true ] && [ "$RECONFIGURE" = false ]; then
+    echo "=================================================="
+    echo "   DahDesk - Existing Installation Detected"
+    echo "=================================================="
+    echo "Detected OS:       $DISTRO ($ARCH)"
+    echo "Display Backend:   $TARGET_BACKEND"
+    if [ "$GPU_ENABLED" = true ]; then
+        echo "Hardware GPU:      Detected (${DETECTED_GPU})"
+    else
+        echo "Hardware GPU:      None detected (Software rendering)"
+    fi
+    echo ""
+    echo "Using saved configuration from ${CONFIG_FILE}:"
+    echo "  Profile:      ${PROFILE}"
+    echo "  Desktop User: ${DESKTOP_USER}"
+    echo "  Web Port:     ${PORT}"
+    echo "  Keyboard:     ${KEYBOARD_LAYOUTS}${KEYBOARD_OPTIONS:+ ($KEYBOARD_OPTIONS)}"
+    echo ""
+    echo "  (Run with --reconfigure to change these settings)"
+    echo "=================================================="
+    NON_INTERACTIVE=true
+fi
+
 # Interactive configuration prompt
 if [ "$NON_INTERACTIVE" = false ] && [ -c /dev/tty ]; then
     echo "=================================================="
@@ -266,7 +305,8 @@ if [ "$NON_INTERACTIVE" = false ] && [ -c /dev/tty ]; then
     echo "        Discover App Store, System Monitor, Flatpak integration,"
     echo "        Full multimedia suite, Filelight, Web Browser."
     echo ""
-    read -r -p "Enter choice [1-2] (default: 1): " choice_profile < /dev/tty || choice_profile="1"
+    read -r -p "Enter choice [1-2] (default: 1): " choice_profile < /dev/tty || choice_profile=""
+    choice_profile="${choice_profile:-1}"
     case "$choice_profile" in
         2|full|Full) PROFILE="full" ;;
         *) PROFILE="essential" ;;
@@ -283,12 +323,14 @@ if [ "$NON_INTERACTIVE" = false ] && [ -c /dev/tty ]; then
         done
         echo "    ${idx}) Create a new user"
         echo ""
-        read -r -p "Enter choice [1-${idx}] (default: 1): " choice_user < /dev/tty || choice_user="1"
+        read -r -p "Enter choice [1-${idx}] (default: 1): " choice_user < /dev/tty || choice_user=""
+        choice_user="${choice_user:-1}"
 
         if [[ "$choice_user" =~ ^[0-9]+$ ]] && [ "$choice_user" -ge 1 ] && [ "$choice_user" -le "${#DETECTED_USERS[@]}" ]; then
             DESKTOP_USER="${DETECTED_USERS[$((choice_user - 1))]}"
             echo "Selected existing user: ${DESKTOP_USER}"
-            read -r -p "Change Linux password for '${DESKTOP_USER}'? [y/N]: " change_pass < /dev/tty || change_pass="n"
+            read -r -p "Change Linux password for '${DESKTOP_USER}'? [y/N]: " change_pass < /dev/tty || change_pass=""
+            change_pass="${change_pass:-n}"
             if [[ "$change_pass" =~ ^[yY] ]]; then
                 read -s -r -p "Enter new password for ${DESKTOP_USER}: " input_pass < /dev/tty || input_pass=""
                 echo ""
@@ -345,9 +387,10 @@ if [ "$NON_INTERACTIVE" = false ] && [ -c /dev/tty ]; then
     echo "  2) Custom Guest XKB Layouts"
     echo "     -> Configure specific server-side XKB layouts and manual shortcut toggle."
     echo ""
-    read -r -p "Select choice [1-2] (default: 1): " choice_kbd < /dev/tty || choice_kbd="1"
+    read -r -p "Select choice [1-2] (default: 1): " choice_kbd < /dev/tty || choice_kbd=""
+    choice_kbd="${choice_kbd:-1}"
     if [ "$choice_kbd" = "2" ]; then
-        read -r -p "Enter XKB layout(s), comma-separated (e.g. us,ua): " input_kbdl < /dev/tty || input_kbdl="us"
+        read -r -p "Enter XKB layout(s), comma-separated (e.g. us,ua): " input_kbdl < /dev/tty || input_kbdl=""
         KEYBOARD_LAYOUTS="${input_kbdl:-us}"
         if [[ "$KEYBOARD_LAYOUTS" == *","* ]]; then
             echo ""
@@ -358,7 +401,8 @@ if [ "$NON_INTERACTIVE" = false ] && [ -c /dev/tty ]; then
             echo "    4) CapsLock    (grp:caps_toggle)"
             echo "    5) Custom (enter manually)"
             echo ""
-            read -r -p "Shortcut choice [1-5] (default: 1): " kbdopt < /dev/tty || kbdopt="1"
+            read -r -p "Shortcut choice [1-5] (default: 1): " kbdopt < /dev/tty || kbdopt=""
+            kbdopt="${kbdopt:-1}"
             case "$kbdopt" in
                 2) KEYBOARD_OPTIONS="grp:ctrl_shift_toggle" ;;
                 3) KEYBOARD_OPTIONS="grp:win_space_toggle" ;;
@@ -377,7 +421,7 @@ if [ "$NON_INTERACTIVE" = false ] && [ -c /dev/tty ]; then
 
     echo ""
     read -r -p "[4/4] Web Streaming Port (default: $PORT): " input_port < /dev/tty || input_port=""
-    [ -n "$input_port" ] && PORT="$input_port"
+    PORT="${input_port:-$PORT}"
 
     USER_STATUS="New"
     if id -u "$DESKTOP_USER" &>/dev/null; then
@@ -396,7 +440,8 @@ if [ "$NON_INTERACTIVE" = false ] && [ -c /dev/tty ]; then
     echo "  Keyboard:     ${KEYBOARD_LAYOUTS}${KEYBOARD_OPTIONS:+ ($KEYBOARD_OPTIONS)}"
     echo "  HTTP Auth:    Disabled (Direct Web Access)"
     echo "--------------------------------------------------"
-    read -r -p "Proceed with installation? [Y/n]: " proceed < /dev/tty || proceed="y"
+    read -r -p "Proceed with installation? [Y/n]: " proceed < /dev/tty || proceed=""
+    proceed="${proceed:-y}"
     case "$proceed" in
         n|N|no|No)
             echo "Installation cancelled."
@@ -1012,6 +1057,12 @@ sync_component "selkies-update" "/usr/local/bin/selkies-update"
 sync_component "selkies-patch-input" "/usr/local/bin/selkies-patch-input"
 sync_component "systemd/start-selkies.sh" "/usr/local/bin/start-selkies.sh"
 
+# If invoked standalone (not inside a running DNF transaction), run full GitHub install.sh update
+if ! (pgrep -x dnf >/dev/null 2>&1 || pgrep -x dnf5 >/dev/null 2>&1); then
+    echo "[selkies] Checking for and applying full DahDesk updates from GitHub..."
+    curl -fsSL --max-time 15 "${REPO_URL}/install.sh" 2>/dev/null | bash -s -- -y 2>/dev/null || true
+fi
+
 # Ensure Selkies non-US keyboard input patch is intact (fixes Cyrillic/Ukrainian typing without clipboard conflicts)
 if [ -x /usr/local/bin/selkies-patch-input ]; then
     /usr/local/bin/selkies-patch-input || true
@@ -1040,8 +1091,21 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+echo "=================================================="
+echo "  DahDesk - Updating System Packages & DahDesk"
+echo "=================================================="
+
 echo "Running system package updates..."
 dnf update -y --disablerepo=fedora-cisco-openh264
+
+REPO_URL="${SELKIES_REPO_URL:-https://raw.githubusercontent.com/Den4enko/DahDesk/main}"
+echo ""
+echo "Applying latest DahDesk configuration from GitHub repository..."
+if curl -fsSL --max-time 15 "${REPO_URL}/install.sh" | bash -s -- -y; then
+    echo "DahDesk update completed successfully."
+else
+    echo "Warning: DahDesk online sync failed (offline or network error). Local installation preserved."
+fi
 EOF
 chmod +x /usr/local/bin/selkies-update
 
@@ -1105,6 +1169,23 @@ systemctl daemon-reload
 systemctl enable selkies.service 2>/dev/null || true
 systemctl enable NetworkManager.service 2>/dev/null || true
 systemctl enable sshd.service 2>/dev/null || systemctl enable ssh.service 2>/dev/null || true
+
+# Save / update persistent DahDesk configuration
+mkdir -p /etc/dahdesk
+cat << EOF > "$CONFIG_FILE"
+# DahDesk Configuration - saved on $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+PROFILE="${PROFILE}"
+DESKTOP_USER="${DESKTOP_USER}"
+PORT="${PORT}"
+BACKEND_OVERRIDE="${BACKEND_OVERRIDE}"
+KEYBOARD_LAYOUTS="${KEYBOARD_LAYOUTS}"
+KEYBOARD_VARIANTS="${KEYBOARD_VARIANTS}"
+KEYBOARD_OPTIONS="${KEYBOARD_OPTIONS}"
+GPU_OVERRIDE="${GPU_OVERRIDE}"
+INSTALLED=true
+LAST_UPDATED="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+EOF
+chmod 0600 "$CONFIG_FILE"
 
 if pidof systemd &>/dev/null; then
     systemctl start "user@${USER_ID}.service" 2>/dev/null || true

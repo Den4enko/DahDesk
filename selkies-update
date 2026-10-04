@@ -6,5 +6,18 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+echo "=================================================="
+echo "  DahDesk - Updating System Packages & DahDesk"
+echo "=================================================="
+
 echo "Running system package updates..."
 dnf update -y --disablerepo=fedora-cisco-openh264
+
+REPO_URL="${SELKIES_REPO_URL:-https://raw.githubusercontent.com/Den4enko/DahDesk/main}"
+echo ""
+echo "Applying latest DahDesk configuration from GitHub repository..."
+if curl -fsSL --max-time 15 "${REPO_URL}/install.sh" | bash -s -- -y; then
+    echo "DahDesk update completed successfully."
+else
+    echo "Warning: DahDesk online sync failed (offline or network error). Local installation preserved."
+fi
