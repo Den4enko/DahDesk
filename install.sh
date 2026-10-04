@@ -445,6 +445,8 @@ case "$DISTRO" in
             xorg-x11-server-Xvfb xrandr xrdb libxkbcommon wl-clipboard xdotool
             kwin kwin-x11 breeze-icon-theme konsole plasma-desktop plasma-workspace plasma-workspace-x11
             dolphin plasma-systemsettings plasma-pa plasma-nm kwrite ark gwenview spectacle kdialog
+            plasma-discover plasma-discover-packagekit plasma-discover-flatpak flatpak packagekit
+            polkit polkit-kde xdg-desktop-portal xdg-desktop-portal-kde
         )
         if [ "$GPU_ENABLED" = true ]; then
             echo "Enabling RPM Fusion repositories for hardware video codecs..."
@@ -506,11 +508,15 @@ case "$DISTRO" in
             echo "Installing complete Fedora KDE Desktop group..."
             dnf group install -y --setopt=install_weak_deps=False kde-desktop || true
             dnf install -y --setopt=install_weak_deps=False \
-                plasma-discover-packagekit flatpak plasma-discover-flatpak \
                 chromium || true
         fi
         ;;
 esac
+
+echo "Configuring Flatpak (Flathub remote)..."
+if command -v flatpak &>/dev/null; then
+    flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo 2>/dev/null || true
+fi
 
 echo "Installing Selkies Streamer package..."
 case "$DISTRO" in
