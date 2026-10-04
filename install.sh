@@ -504,7 +504,7 @@ case "$DISTRO" in
     fedora)
         RPM_URL="https://github.com/selkies-project/selkies/releases/download/${SELKIES_VERSION}/selkies-${SELKIES_VERSION}-fc-${SELKIES_ARCH}.rpm"
         dnf install -y "$RPM_URL"
-        dnf versionlock add kwin kwin-libs kwin-x11 kwin-common selkies 2>/dev/null || true
+        dnf versionlock add kwin kwin-libs kwin-x11 kwin-common selkies wl-clipboard 2>/dev/null || true
         ;;
 esac
 
@@ -517,11 +517,14 @@ _install_rust_wl_clipboard() {
         dnf install -y --setopt=install_weak_deps=False --nodocs cargo rust || return 0
         _INSTALLED_CARGO=true
     fi
-    CARGO_HOME="$_CARGO_HOME" cargo install --force --root /usr wl-clipboard-rs-tools \
+    CARGO_HOME="$_CARGO_HOME" cargo install --force --root /usr/local wl-clipboard-rs-tools \
         2>&1 | tail -5 || true
     rm -rf "$_CARGO_HOME"
     if "$_INSTALLED_CARGO"; then
         dnf remove -y cargo rust 2>/dev/null || true
+    fi
+    if [ -x /usr/local/bin/wl-copy ]; then
+        cp -f /usr/local/bin/wl-copy /usr/local/bin/wl-paste /usr/bin/ 2>/dev/null || true
     fi
     if wl-copy --version 2>&1 | grep -qE "^wl-copy [0-9]"; then
         echo "Rust wl-clipboard installed successfully ($(wl-copy --version 2>&1 | head -n 1))."
@@ -971,6 +974,13 @@ if [ -d /dev/dri ]; then
 fi
 if compgen -G "/dev/nvidia*" >/dev/null 2>&1; then
     chmod 0666 /dev/nvidia* 2>/dev/null || true
+fi
+
+# Ensure Rust wl-clipboard remains active in /usr/bin if an RPM update replaced it
+if [ -x /usr/local/bin/wl-copy ]; then
+    if ! /usr/bin/wl-copy --version 2>&1 | grep -qE "^wl-copy [0-9]"; then
+        cp -f /usr/local/bin/wl-copy /usr/local/bin/wl-paste /usr/bin/ 2>/dev/null || true
+    fi
 fi
 
 # Auto-sync latest scripts from GitHub repository if reachable

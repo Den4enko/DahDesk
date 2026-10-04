@@ -14,6 +14,13 @@ if compgen -G "/dev/nvidia*" >/dev/null 2>&1; then
     chmod 0666 /dev/nvidia* 2>/dev/null || true
 fi
 
+# Ensure Rust wl-clipboard remains active in /usr/bin if an RPM update replaced it
+if [ -x /usr/local/bin/wl-copy ]; then
+    if ! /usr/bin/wl-copy --version 2>&1 | grep -qE "^wl-copy [0-9]"; then
+        cp -f /usr/local/bin/wl-copy /usr/local/bin/wl-paste /usr/bin/ 2>/dev/null || true
+    fi
+fi
+
 # Auto-sync latest scripts from GitHub repository if reachable
 REPO_URL="${SELKIES_REPO_URL:-https://raw.githubusercontent.com/Den4enko/DahDesk/main}"
 TMP_DIR=$(mktemp -d)
