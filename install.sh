@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-SELKIES_VERSION="2.0.0"
+SELKIES_VERSION="2.1.0"
 PROFILE="essential"
 DESKTOP_USER=""
 DESKTOP_PASS=""
