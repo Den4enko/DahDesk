@@ -516,7 +516,20 @@ echo "Installing Selkies Streamer package..."
 case "$DISTRO" in
     fedora)
         RPM_URL="https://github.com/selkies-project/selkies/releases/download/${SELKIES_VERSION}/selkies-${SELKIES_VERSION}-fc-${SELKIES_ARCH}.rpm"
-        dnf install -y "$RPM_URL"
+        INSTALLED_SELKIES=""
+        if rpm -q selkies &>/dev/null; then
+            INSTALLED_SELKIES=$(rpm -q --qf '%{VERSION}' selkies)
+        fi
+        if [ "$INSTALLED_SELKIES" = "$SELKIES_VERSION" ]; then
+            echo "Selkies ${SELKIES_VERSION} is already installed."
+        else
+            # The lock from a previous run pins the old version and would block the upgrade.
+            dnf versionlock delete selkies 2>/dev/null || true
+            if [ -n "$INSTALLED_SELKIES" ]; then
+                echo "Upgrading Selkies ${INSTALLED_SELKIES} -> ${SELKIES_VERSION}..."
+            fi
+            dnf install -y "$RPM_URL"
+        fi
         dnf versionlock add kwin kwin-libs kwin-x11 kwin-common selkies wl-clipboard 2>/dev/null || true
         ;;
 esac
