@@ -69,6 +69,8 @@ curl -fsSL .../install.sh | sudo bash -s -- --user admin --password secret --por
 | `--backend <mode>` | Force `wayland` or `x11` | auto |
 | `--gpu` | Force enable GPU hardware acceleration (Mesa, VA-API, and video codecs) | auto-detect |
 | `--no-gpu` | Disable GPU detection and use software rendering | auto-detect |
+| `--stock-kwin` | Experimental: use Fedora's own KWin instead of the linuxserver patched one (no KWin versionlock) | |
+| `--patched-kwin` | Go back to the linuxserver patched KWin | default |
 | `--keyboard <layouts>` | XKB layouts, comma-separated (e.g. `us,ua`) | `us` |
 | `--keyboard-variants <v>` | XKB variants, comma-separated | |
 | `--keyboard-options <opts>` | XKB options (e.g. `grp:alt_shift_toggle`) | |
