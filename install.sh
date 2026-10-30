@@ -13,6 +13,7 @@ KEYBOARD_LAYOUTS="us"       # comma-separated XKB layouts, e.g. "us,ua"
 KEYBOARD_VARIANTS=""        # comma-separated variants (can be empty), e.g. ",phonetic"
 KEYBOARD_OPTIONS=""         # XKB options, e.g. "grp:alt_shift_toggle"
 GPU_OVERRIDE=""             # "true", "false", or "" (auto-detect)
+STOCK_KWIN=false            # true: Fedora's own KWin instead of the linuxserver patched one
 RECONFIGURE=false
 CONFIG_FILE="/etc/dahdesk/dahdesk.conf"
 CONFIG_EXISTS=false
@@ -71,6 +72,14 @@ while [[ $# -gt 0 ]]; do
             GPU_OVERRIDE="false"
             shift
             ;;
+        --stock-kwin)
+            STOCK_KWIN=true
+            shift
+            ;;
+        --patched-kwin)
+            STOCK_KWIN=false
+            shift
+            ;;
         -r|--reconfigure)
             RECONFIGURE=true
             shift
@@ -91,6 +100,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --backend <mode>           Display backend: wayland or x11 (default: auto)"
             echo "  --gpu                      Force enable GPU acceleration (Mesa, VA-API, and video codecs)"
             echo "  --no-gpu                   Force disable GPU detection and use software rendering"
+            echo "  --stock-kwin               Use Fedora's own KWin (experimental) instead of the linuxserver patched one"
+            echo "  --patched-kwin             Go back to the linuxserver patched KWin (default)"
             echo "  --keyboard <layouts>       XKB keyboard layouts, comma-separated (e.g. 'us,ua')"
             echo "  --keyboard-variants <v>    XKB variants, comma-separated (e.g. ',phonetic')"
             echo "  --keyboard-options <opts>  XKB options (e.g. 'grp:alt_shift_toggle')"
@@ -530,7 +541,7 @@ case "$DISTRO" in
             fi
             dnf install -y "$RPM_URL"
         fi
-        dnf versionlock add kwin kwin-libs kwin-x11 kwin-common selkies wl-clipboard 2>/dev/null || true
+        dnf versionlock add selkies wl-clipboard 2>/dev/null || true
         ;;
 esac
 
@@ -562,13 +573,44 @@ _install_rust_wl_clipboard() {
 }
 _install_rust_wl_clipboard
 
-if [ -n "$KWIN_LAYER" ]; then
+KWIN_PKGS=(kwin kwin-libs kwin-common kwin-x11)
+
+# The linuxserver layer as a gzipped tar on stdout; fails when the registry is unreachable
+fetch_kwin_layer() {
+    local token manifest digest
+    token=$(curl -s "https://ghcr.io/token?scope=repository:linuxserver/selkies-layers:pull" | grep -o '"token":"[^"]*' | cut -d'"' -f4)
+    manifest=$(curl -s -H "Authorization: Bearer $token" -H "Accept: application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json" "https://ghcr.io/v2/linuxserver/selkies-layers/manifests/$KWIN_LAYER")
+    digest=$(echo "$manifest" | grep -o '"digest": *"sha256:[^"]*' | tail -n 1 | cut -d'"' -f4)
+    [ -n "$digest" ] || return 1
+    curl -fsL -H "Authorization: Bearer $token" "https://ghcr.io/v2/linuxserver/selkies-layers/blobs/$digest"
+}
+
+if [ "$STOCK_KWIN" = true ]; then
+    echo "Using Fedora's own KWin (--stock-kwin)..."
+    dnf versionlock delete "${KWIN_PKGS[@]}" 2>/dev/null || true
+    mapfile -t installed_kwin < <(rpm -q --qf '%{NAME}\n' "${KWIN_PKGS[@]}" 2>/dev/null | grep -v 'not installed')
+    # Packaged files the layer overwrote fail their digest check
+    if [ "${#installed_kwin[@]}" -gt 0 ] && rpm -V "${installed_kwin[@]}" 2>/dev/null | grep -q '^..5'; then
+        echo "Removing the patched KWin files and restoring Fedora's..."
+        # Files the layer added on top of the packages would still be picked up by ldconfig
+        if layer_files=$(fetch_kwin_layer | tar -tzf - 2>/dev/null) && [ -n "$layer_files" ]; then
+            while IFS= read -r f; do
+                f="/${f#./}"
+                case "$f" in /usr/*) ;; *) continue ;; esac
+                if { [ -f "$f" ] || [ -L "$f" ]; } && ! rpm -qf "$f" &>/dev/null; then
+                    rm -f "$f"
+                fi
+            done <<< "$layer_files"
+        else
+            echo "Warning: could not list the patched KWin layer; files it added may remain."
+        fi
+        dnf reinstall -y "${installed_kwin[@]}" || dnf distro-sync -y "${installed_kwin[@]}" || true
+        ldconfig 2>/dev/null || true
+    fi
+elif [ -n "$KWIN_LAYER" ]; then
     echo "Applying KWin nested Wayland patch ($KWIN_LAYER)..."
-    TOKEN=$(curl -s "https://ghcr.io/token?scope=repository:linuxserver/selkies-layers:pull" | grep -o '"token":"[^"]*' | cut -d'"' -f4)
-    MANIFEST=$(curl -s -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json" "https://ghcr.io/v2/linuxserver/selkies-layers/manifests/$KWIN_LAYER")
-    DIGEST=$(echo "$MANIFEST" | grep -o '"digest": *"sha256:[^"]*' | tail -n 1 | cut -d'"' -f4)
-    if [ -n "$DIGEST" ]; then
-        curl -sL -H "Authorization: Bearer $TOKEN" "https://ghcr.io/v2/linuxserver/selkies-layers/blobs/$DIGEST" | tar -xzf - -C / usr/ 2>/dev/null || true
+    if fetch_kwin_layer | tar -xzf - -C / usr/ 2>/dev/null; then
+        :
     elif command -v podman &>/dev/null; then
         CID=$(podman create "ghcr.io/linuxserver/selkies-layers:$KWIN_LAYER")
         podman export "$CID" | tar -xf - -C / usr/
@@ -577,6 +619,8 @@ if [ -n "$KWIN_LAYER" ]; then
         CID=$(docker create "ghcr.io/linuxserver/selkies-layers:$KWIN_LAYER")
         docker export "$CID" | tar -xf - -C / usr/
         docker rm "$CID" >/dev/null
+    else
+        echo "Warning: could not download the patched KWin layer; KWin stays as it is."
     fi
 
     # Update library cache and ensure libkwin symlink points to patched binary
@@ -589,6 +633,7 @@ if [ -n "$KWIN_LAYER" ]; then
         fi
     done
     ldconfig 2>/dev/null || true
+    dnf versionlock add "${KWIN_PKGS[@]}" 2>/dev/null || true
 else
     echo "No Wayland KWin patch available for $DISTRO. Using X11 backend."
 fi
@@ -1532,6 +1577,7 @@ KEYBOARD_LAYOUTS="${KEYBOARD_LAYOUTS}"
 KEYBOARD_VARIANTS="${KEYBOARD_VARIANTS}"
 KEYBOARD_OPTIONS="${KEYBOARD_OPTIONS}"
 GPU_OVERRIDE="${GPU_OVERRIDE}"
+STOCK_KWIN="${STOCK_KWIN}"
 INSTALLED=true
 LAST_UPDATED="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 EOF
@@ -1553,6 +1599,7 @@ echo "  DahDesk Installation Complete!"
 echo "=================================================="
 echo "Profile:      ${PROFILE}"
 echo "Backend:      ${INITIAL_BACKEND}"
+echo "KWin:         $([ "$STOCK_KWIN" = true ] && echo "Fedora (stock, experimental)" || echo "linuxserver patched")"
 echo "Hardware GPU: $([ "$GPU_ENABLED" = true ] && echo "Active (${DETECTED_GPU})" || echo "None / Software rendering")"
 echo "Web URL:      https://<server-ip>:${PORT}/"
 echo "Desktop User: ${DESKTOP_USER}"
