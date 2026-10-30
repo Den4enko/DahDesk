@@ -16,11 +16,11 @@ DahDesk is an opinionated installer that wires these upstream projects together 
 2. **Installs the official Selkies streamer package** from the upstream GitHub release.
 3. **Applies the Linuxserver KWin patch** — pulled directly from `ghcr.io/linuxserver/selkies-layers` — which enables zero-copy GPU capture under nested/unprivileged Wayland.
 4. **Creates a systemd user service** (`selkies.service`) that starts the desktop and streaming stack automatically on boot.
-5. **Installs native package-manager hooks** so every normal system update automatically maintains required KWin capabilities, verifies device permissions, and self-syncs latest components from GitHub without interrupting active user sessions:
+5. **Installs native package-manager hooks** so every normal system update automatically maintains required KWin capabilities, device permissions, and the Selkies input patch (local only — nothing is downloaded):
    - **Fedora:** DNF5 Actions Plugin (`/etc/dnf/libdnf5-plugins/actions.d/selkies-sync.actions`)
 6. **Locks critical packages** (`kwin`, `kwin-libs`, `selkies`) against unintended upstream upgrades that could break streaming.
 
-Once installed, just update your system normally — DahDesk keeps itself consistent automatically.
+Once installed, just update your system normally — DahDesk keeps itself consistent automatically. DahDesk itself is only updated when you run `sudo selkies-update`.
 
 ---
 
@@ -105,7 +105,7 @@ Everything in Essential, plus the complete official KDE Spin group:
 
 ---
 
-## Normal System Updates (Self-Healing & Auto-Sync)
+## System Updates & Self-Healing
 
 No special scripts needed — just update your system normally:
 
@@ -117,11 +117,16 @@ sudo dnf update
 After every DNF transaction, the native DNF5 actions hook automatically runs `/usr/local/bin/selkies-sync`, which:
 - Re-strips `kwin_wayland` Linux capabilities (`setcap -r`) for unprivileged container/LXC compatibility
 - Verifies and maintains `/dev/dri/*` and `/dev/nvidia*` device permissions for hardware acceleration
-- Syncs all components directly from GitHub (`selkies-sync`, `selkies-update`, `selkies-patch-input`, `start-selkies.sh`) with atomic replacement and execution bit preservation
 - Maintains Selkies non-US keyboard input patch and session auto-restart hooks
 - Leaves active streaming sessions running uninterrupted
 
-Manual trigger (if needed): `sudo selkies-update`
+The hook never downloads anything. To update DahDesk itself, run it manually:
+
+```bash
+sudo selkies-update
+```
+
+This runs `dnf update` and then re-applies the latest `install.sh` from GitHub with your saved configuration. It restarts `selkies.service`, so the active streaming session will reconnect.
 
 ---
 
