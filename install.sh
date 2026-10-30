@@ -1406,41 +1406,6 @@ if [ -x /usr/local/bin/wl-copy ]; then
     fi
 fi
 
-# Auto-sync latest scripts from GitHub repository if reachable
-REPO_URL="${SELKIES_REPO_URL:-https://raw.githubusercontent.com/Den4enko/DahDesk/main}"
-TMP_DIR=$(mktemp -d)
-trap 'rm -rf "${TMP_DIR}"' EXIT
-
-sync_component() {
-    local src_path="$1"
-    local dest_path="$2"
-    local name
-    name=$(basename "$dest_path")
-    local tmp_file="${TMP_DIR}/${name}"
-    local tmp_dest="${dest_path}.tmp.$$"
-
-    if curl -fsSL --max-time 5 "${REPO_URL}/${src_path}" -o "${tmp_file}" 2>/dev/null; then
-        if [ -s "${tmp_file}" ] && ! cmp -s "${tmp_file}" "${dest_path}" 2>/dev/null; then
-            echo "[selkies] Updating ${name} from repository..."
-            cp "${tmp_file}" "${tmp_dest}"
-            chmod +x "${tmp_dest}"
-            mv -f "${tmp_dest}" "${dest_path}"
-        fi
-    fi
-    rm -f "${tmp_dest}" 2>/dev/null || true
-}
-
-sync_component "selkies-sync" "/usr/local/bin/selkies-sync"
-sync_component "selkies-update" "/usr/local/bin/selkies-update"
-sync_component "selkies-patch-input" "/usr/local/bin/selkies-patch-input"
-sync_component "systemd/start-selkies.sh" "/usr/local/bin/start-selkies.sh"
-
-# If invoked standalone (not inside a running DNF transaction), run full GitHub install.sh update
-if ! (pgrep -x dnf >/dev/null 2>&1 || pgrep -x dnf5 >/dev/null 2>&1); then
-    echo "[selkies] Checking for and applying full DahDesk updates from GitHub..."
-    curl -fsSL --max-time 15 "${REPO_URL}/install.sh" | bash -s -- -y || true
-fi
-
 # Ensure Selkies non-US keyboard input patch is intact (fixes Cyrillic/Ukrainian typing without clipboard conflicts)
 if [ -x /usr/local/bin/selkies-patch-input ]; then
     /usr/local/bin/selkies-patch-input || true
