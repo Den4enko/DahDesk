@@ -722,6 +722,20 @@ EOF
 done
 chown -R "${USER_ID}:${USER_GROUP}" "${USER_HOME}/.local" "${USER_HOME}/.config"
 
+# selkies-session gives the desktop a private XDG_RUNTIME_DIR and drops PIPEWIRE_RUNTIME_DIR,
+# so KWin's screencast, the portals and plasmashell can't reach the user's PipeWire.
+# Plasma sources these scripts before starting KWin and passes the result on to D-Bus activation.
+mkdir -p /etc/xdg/plasma-workspace/env
+cat << 'EOF' > /etc/xdg/plasma-workspace/env/dahdesk-pipewire.sh
+_dahdesk_runtime="/run/user/$(id -u)"
+if [ -z "${PIPEWIRE_RUNTIME_DIR:-}" ] && [ "${XDG_RUNTIME_DIR:-}" != "$_dahdesk_runtime" ] \
+        && [ -S "$_dahdesk_runtime/pipewire-0" ]; then
+    export PIPEWIRE_RUNTIME_DIR="$_dahdesk_runtime"
+fi
+unset _dahdesk_runtime
+EOF
+chmod 0644 /etc/xdg/plasma-workspace/env/dahdesk-pipewire.sh
+
 # Disable fwupd and power management sleep targets in headless/container environments
 systemctl disable fwupd.service 2>/dev/null || true
 systemctl mask fwupd.service sleep.target suspend.target hibernate.target hybrid-sleep.target 2>/dev/null || true
