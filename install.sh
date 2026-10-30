@@ -1482,6 +1482,13 @@ Environment=PULSE_SERVER=unix:/run/user/${USER_ID}/pulse/native
 Environment=SELKIES_BACKEND=${INITIAL_BACKEND}
 Environment=SELKIES_PORT=${PORT}
 Environment=KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
+# Remote-desktop defaults rather than game streaming; each stays changeable in the web UI.
+# Turbo off: encode only when the screen changes. A still screen is cleaned up to full quality.
+Environment=SELKIES_VIDEO_STREAMING_MODE=false
+Environment=SELKIES_FRAMERATE=30
+Environment=SELKIES_USE_PAINT_OVER_QUALITY=true
+# First encoder is the default; the rest stay selectable (and serve browsers without H.265)
+Environment=SELKIES_ENCODER=h265enc,h264enc,vp8enc,vp9enc,av1enc,h264enc-striped,jpeg
 ${XKB_VARIANT_LINE}
 ${XKB_OPTIONS_LINE}
 ${GPU_SERVICE_ENV}
