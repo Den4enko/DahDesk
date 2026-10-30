@@ -5,139 +5,180 @@ import pwd
 import re
 import sys
 
-def patch_selkies_core_js():
-    patterns = [
-        "/opt/selkies/lib/python*/site-packages/selkies/selkies_web/src/selkies-core.js",
-        "/opt/selkies/lib64/python*/site-packages/selkies/selkies_web/src/selkies-core.js",
-        "/usr/lib/python*/site-packages/selkies/selkies_web/src/selkies-core.js",
-        "/usr/lib64/python*/site-packages/selkies/selkies_web/src/selkies-core.js",
-        "/usr/local/lib/python*/site-packages/selkies/selkies_web/src/selkies-core.js",
-    ]
-    target_files = []
-    for p in patterns:
-        target_files.extend(glob.glob(p))
+SELKIES_ROOTS = [
+    "/opt/selkies/lib/python*/site-packages/selkies",
+    "/opt/selkies/lib64/python*/site-packages/selkies",
+    "/usr/lib/python*/site-packages/selkies",
+    "/usr/lib64/python*/site-packages/selkies",
+    "/usr/local/lib/python*/site-packages/selkies",
+]
 
-    old_arms = [
-        "this._altGrTimeout=setTimeout(()=>{this._altGrArmed=!1,this._sendKeyEvent(A.XK_Control_L,`ControlLeft`,!0)},20);return",
-        "this._altGrTimeout=setTimeout(()=>{this._altGrArmed=!1,this._sendKeyEvent(A.XK_Control_L,`ControlLeft`,!0)},100);return",
-        "this._altGrTimeout=setTimeout(()=>{this._altGrArmed=!1,this._sendKeyEvent(A.XK_Control_L,`ControlLeft`,!0)},20)",
-        "this._altGrTimeout=setTimeout(()=>{this._altGrArmed=!1,this._sendKeyEvent(A.XK_Control_L,`ControlLeft`,!0)},100)",
-    ]
-    new_arm = "this._sendKeyEvent(A.XK_Control_L,`ControlLeft`,!0);return"
+problems = []
 
-    old_altright = "r===`AltRight`&&t.timeStamp-this._altGrCtrlTime<50?i=A.XK_ISO_Level3_Shift:this._sendKeyEvent(A.XK_Control_L,`ControlLeft`,!0)"
-    new_altright = "r===`AltRight`&&t.timeStamp-this._altGrCtrlTime<50?(this._sendKeyEvent(A.XK_Control_L,`ControlLeft`,!1),i=A.XK_ISO_Level3_Shift):null"
 
-    for file_path in target_files:
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
+def warn(message):
+    problems.append(message)
+    print(f"[selkies-patch-input] Warning: {message}", file=sys.stderr)
 
-            changed = False
-            for old_arm in old_arms:
-                if old_arm in content:
-                    content = content.replace(old_arm, new_arm)
-                    changed = True
 
-            if old_altright in content:
-                content = content.replace(old_altright, new_altright)
-                changed = True
+def find_files(relative):
+    found = []
+    for root in SELKIES_ROOTS:
+        found.extend(glob.glob(os.path.join(root, relative)))
+    return found
 
-            if changed:
-                with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(content)
-                print(f"[selkies-patch-input] Applied AltGr/Ctrl immediate dispatch fix to: {file_path}")
-        except Exception as e:
-            print(f"[selkies-patch-input] Warning: failed patching {file_path}: {e}", file=sys.stderr)
 
-def patch_selkies_input():
-    patterns = [
-        "/opt/selkies/lib/python*/site-packages/selkies/input_handler.py",
-        "/opt/selkies/lib64/python*/site-packages/selkies/input_handler.py",
-        "/usr/lib/python*/site-packages/selkies/input_handler.py",
-        "/usr/lib64/python*/site-packages/selkies/input_handler.py",
-        "/usr/local/lib/python*/site-packages/selkies/input_handler.py",
-    ]
+def replace_once(content, path, name, old, new):
+    """Replace `old` with `new`, or leave content alone when `new` is already in place."""
+    if new in content:
+        return content
+    if content.count(old) != 1:
+        warn(f"{name}: anchor not found in {path} (Selkies changed, patch needs updating)")
+        return content
+    return content.replace(old, new)
 
-    target_files = []
-    for p in patterns:
-        target_files.extend(glob.glob(p))
 
-    new_inject_fn = '''    async def _inject_text_via_clipboard(self, text: str) -> bool:
-        """Type `text` via clipboard with debounced restore and zero typing lag."""
-        async with self._clipboard_inject_lock:
-            self._clipboard_inject_active = True
-            held_modifiers = list(self.active_modifiers)
-            try:
-                for mod_keysym in held_modifiers:
-                    await self.send_x11_keypress(mod_keysym, down=False)
+def replace_once_re(content, path, name, pattern, repl, applied):
+    """Regex variant of replace_once for minified JS, where identifiers change between builds."""
+    if re.search(applied, content):
+        return content
+    new_content, count = re.subn(pattern, repl, content)
+    if count != 1:
+        warn(f"{name}: anchor not found in {path} (Selkies changed, patch needs updating)")
+        return content
+    return new_content
 
-                # Cancel any pending restore from previous keystrokes
-                restore_task = getattr(self, '_clipboard_restore_task', None)
-                if restore_task and not restore_task.done():
-                    restore_task.cancel()
 
-                # Save the user's real clipboard once before consecutive typing starts
-                if getattr(self, '_saved_user_clipboard', None) is None:
-                    try:
-                        old_data, old_mime = await self.read_clipboard(use_binary=True)
-                        self._saved_user_clipboard = (old_data, old_mime)
-                    except Exception:
-                        self._saved_user_clipboard = (None, None)
+def patch_file(path, apply, old_signatures=()):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except OSError as e:
+        warn(f"cannot read {path}: {e}")
+        return
+    for sig in old_signatures:
+        if sig in content:
+            warn(f"{path} carries patches from an older DahDesk; reinstall Selkies "
+                 f"(sudo selkies-update) so it can be patched again")
+            return
+    new_content = apply(content, path)
+    if new_content == content:
+        return
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        print(f"[selkies-patch-input] Patched {path}")
+    except OSError as e:
+        warn(f"cannot write {path}: {e}")
 
-                if not await self.write_clipboard(text):
-                    return False
 
-                # Fast, reliable Ctrl+V chord (~60ms total chord window)
-                ctrl_keysym = 0xFFE1  # Shift (Shift+Insert paste works in terminals too)
-                v_keysym = 0xFF63  # Insert
-                await asyncio.sleep(0.01)
-                await self.send_x11_keypress(ctrl_keysym, down=True)
-                await asyncio.sleep(0.02)
-                await self.send_x11_keypress(v_keysym, down=True, neutralize=False)
-                await asyncio.sleep(0.02)
-                await self.send_x11_keypress(v_keysym, down=False)
-                await asyncio.sleep(0.01)
-                await self.send_x11_keypress(ctrl_keysym, down=False)
+# --- Web client: AltGr/Ctrl on Windows clients -------------------------------
+# Windows reports AltGr as ControlLeft + AltRight. Selkies holds ControlLeft
+# back for 100 ms to see whether AltRight follows, which delays every Ctrl
+# shortcut. Send Ctrl at once and take it back if AltRight does follow.
 
-                # Debounced asynchronous restore: wait 0.6s of typing idle before restoring
-                async def _restore_after_idle():
-                    try:
-                        await asyncio.sleep(0.6)
-                        saved = getattr(self, '_saved_user_clipboard', None)
-                        self._saved_user_clipboard = None
-                        if saved:
-                            data, mime = saved
-                            if data is not None:
-                                await self.write_clipboard(data, mime or "text/plain")
-                            elif self.is_wayland:
-                                await self._clear_injected_clipboard()
-                    except asyncio.CancelledError:
-                        pass
-                    except Exception as err:
-                        logger_webrtc_input.debug(f"debounced clipboard restore failed: {err}")
-
-                self._clipboard_restore_task = asyncio.create_task(_restore_after_idle())
-                return True
-            except Exception as e:
-                logger_webrtc_input.error(f"Clipboard text injection failed: {e}")
-                return False
-            finally:
-                for mod_keysym in held_modifiers:
-                    if mod_keysym in self.active_modifiers:
-                        await self.send_x11_keypress(mod_keysym, down=True)
-                self._clipboard_inject_active = False
-\n'''
-
-    old_timeout = 'msg_type, data = await asyncio.wait_for(self.keyboard_queue.get(), timeout=0.05)'
-    new_timeout = 'msg_type, data = await asyncio.wait_for(self.keyboard_queue.get(), timeout=0.015)'
-
-    inject_pattern = re.compile(
-        r'    async def _inject_text_via_clipboard\(self, text: str\) -> bool:.*?\n    async def _clear_injected_clipboard',
-        re.DOTALL
+def _patch_core_js(content, path):
+    content = replace_once_re(
+        content, path, "AltGr arm",
+        r"this\._altGrTimeout=setTimeout\(\(\)=>\{this\._altGrArmed=!1,"
+        r"this\._sendKeyEvent\(([\w$]+)\.XK_Control_L,`ControlLeft`,!0\)\},(\d+)\);return",
+        r"this._sendKeyEvent(\1.XK_Control_L,`ControlLeft`,!0),"
+        r"this._altGrTimeout=setTimeout(()=>{this._altGrArmed=!1},\2);return",
+        r"this\._altGrTimeout=setTimeout\(\(\)=>\{this\._altGrArmed=!1\},\d+\);return",
     )
+    content = replace_once_re(
+        content, path, "AltGr keydown",
+        r"([\w$]+)===`AltRight`&&([\w$]+)\.timeStamp-this\._altGrCtrlTime<50\?([\w$]+)=([\w$]+)\.XK_ISO_Level3_Shift:"
+        r"this\._sendKeyEvent\(\4\.XK_Control_L,`ControlLeft`,!0\)",
+        r"\1===`AltRight`&&\2.timeStamp-this._altGrCtrlTime<50?"
+        r"(this._sendKeyEvent(\4.XK_Control_L,`ControlLeft`,!1),\3=\4.XK_ISO_Level3_Shift):null",
+        r"this\._altGrCtrlTime<50\?\(this\._sendKeyEvent\([\w$]+\.XK_Control_L,`ControlLeft`,!1\)",
+    )
+    content = replace_once_re(
+        content, path, "AltGr keyup",
+        r"this\._altGrArmed&&\(this\._altGrArmed=!1,clearTimeout\(this\._altGrTimeout\),"
+        r"this\._sendKeyEvent\([\w$]+\.XK_Control_L,`ControlLeft`,!0\)\),",
+        r"this._altGrArmed&&(this._altGrArmed=!1,clearTimeout(this._altGrTimeout)),",
+        r"this\._altGrArmed&&\(this\._altGrArmed=!1,clearTimeout\(this\._altGrTimeout\)\),",
+    )
+    return content
 
-    cyr_builder = """
+
+def patch_selkies_core_js():
+    # index.html loads the hashed bundle in assets/; src/ holds an identical copy
+    targets = find_files("selkies_web/assets/selkies-core-*.js") + find_files("selkies_web/src/selkies-core.js")
+    if not targets:
+        warn("selkies-core.js not found")
+    for path in targets:
+        patch_file(path, _patch_core_js)
+
+
+# --- Server: keyboard input --------------------------------------------------
+
+# Upstream reads, replaces and restores the clipboard around every typed
+# character. Keep the user's clipboard aside for a whole typing burst instead
+# and put it back once typing pauses.
+INIT_OLD = """        self._clipboard_inject_lock = asyncio.Lock()
+        self._clipboard_inject_active = False
+"""
+INIT_NEW = """        self._clipboard_inject_lock = asyncio.Lock()
+        self._clipboard_inject_active = False
+        self._dahdesk_saved_clipboard = None
+        self._dahdesk_clipboard_restore = None
+"""
+
+INJECT_SAVE_OLD = """                old_data, old_mime = await self.read_clipboard(use_binary=True)
+                if not await self.write_clipboard(SecretText(text)):
+                    return False
+"""
+INJECT_SAVE_NEW = """                # DahDesk: keep the user's clipboard aside once per typing burst
+                restore = self._dahdesk_clipboard_restore
+                if restore is not None and not restore.done():
+                    restore.cancel()
+                if self._dahdesk_saved_clipboard is None:
+                    self._dahdesk_saved_clipboard = await self.read_clipboard(use_binary=True)
+                if not await self.write_clipboard(SecretText(text)):
+                    return False
+"""
+
+INJECT_RESTORE_OLD = """                if old_data is not None:
+                    await self.write_clipboard(old_data, old_mime or "text/plain")
+                elif self.is_wayland:
+                    await self._clear_injected_clipboard()
+                return True
+"""
+INJECT_RESTORE_NEW = """                self._dahdesk_clipboard_restore = asyncio.create_task(self._dahdesk_restore_clipboard())
+                return True
+"""
+
+RESTORE_FN_OLD = """    def _paste_sends(self) -> Optional[Callable[[int, float], List[str]]]:
+"""
+RESTORE_FN_NEW = """    async def _dahdesk_restore_clipboard(self) -> None:
+        \"\"\"DahDesk: put back the clipboard a typing burst replaced, 0.6 s after the last character.\"\"\"
+        try:
+            await asyncio.sleep(0.6)
+            async with self._clipboard_inject_lock:
+                saved, self._dahdesk_saved_clipboard = self._dahdesk_saved_clipboard, None
+                if saved is None:
+                    return
+                old_data, old_mime = saved
+                if old_data is not None:
+                    await self.write_clipboard(old_data, old_mime or "text/plain")
+                elif self.is_wayland:
+                    await self._clear_injected_clipboard()
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger_webrtc_input.debug(f"clipboard restore after typing failed: {e}")
+
+    def _paste_sends(self) -> Optional[Callable[[int, float], List[str]]]:
+"""
+
+TIMEOUT_OLD = 'msg_type, data = await asyncio.wait_for(self.keyboard_queue.get(), timeout=0.05)'
+TIMEOUT_NEW = 'msg_type, data = await asyncio.wait_for(self.keyboard_queue.get(), timeout=0.015)'
+
+# Ctrl+<Cyrillic letter> shortcuts: map Russian and Ukrainian keysyms to the QWERTY key in the same place
+CYRILLIC_BUILDER = """
 def _build_cyrillic_qwerty_map():
     key_pairs = [
         ('q', 'й'), ('w', 'ц'), ('e', 'у'), ('r', 'к'), ('t', 'е'),
@@ -169,8 +210,9 @@ def _build_cyrillic_qwerty_map():
         m[ord(cyr.lower())] = lat_lower
         m[ord(cyr.upper())] = lat_upper
         if cyr in x11_legacy:
+            # Legacy capitals sit 0x20 above Russian letters, 0x10 above Ukrainian ones and Ё
             leg_lower = x11_legacy[cyr]
-            leg_upper = leg_lower + 0x20 if leg_lower >= 0x06C0 else leg_lower - 0x10
+            leg_upper = leg_lower + (0x20 if leg_lower >= 0x06C0 else 0x10)
             m[leg_lower] = lat_lower
             m[leg_upper] = lat_upper
     return m
@@ -178,18 +220,17 @@ def _build_cyrillic_qwerty_map():
 CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
 """
 
-    old_block_1 = """                    if msg_type == "kd":
+BLOCK_1_OLD = """                    if msg_type == "kd":
                         if (is_unicode_fallback and not native_inject()
                                 and (not self.active_modifiers
                                      or self._has_separate_app_compositor())):"""
-
-    new_block_1 = """                    if msg_type == "kd":
+BLOCK_1_NEW = """                    if msg_type == "kd":
                         if (is_unicode_fallback and not native_inject()
                                 and not (self.active_modifiers & self.ACTION_MODIFIER_KEYSYMS)
                                 and (not self.active_modifiers
                                      or self._has_separate_app_compositor())):"""
 
-    old_block_2 = """                        if (not is_unicode_fallback
+BLOCK_2_OLD = """                        if (not is_unicode_fallback
                                 and keysym is not None and not native_inject()
                                 and keysym not in self.MODIFIER_KEYSYMS
                                 and not ((self.active_modifiers & self.ACTION_MODIFIER_KEYSYMS)
@@ -201,20 +242,7 @@ CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
                                     unicode_buffer.append(char_to_type)
                                     self._route_key_as_text(keysym)
                                     continue"""
-
-    clean_block_2 = """                        if (not is_unicode_fallback
-                                and keysym is not None and not native_inject()
-                                and keysym not in self.MODIFIER_KEYSYMS
-                                and not (self.active_modifiers & self.ACTION_MODIFIER_KEYSYMS)):
-                            char_to_type = keysym_to_character(keysym)
-                            if char_to_type is not None:
-                                owner = await self._ensure_wayland_keymap_owner()
-                                if owner is None or not owner.resolves(keysym):
-                                    unicode_buffer.append(char_to_type)
-                                    self._route_key_as_text(keysym)
-                                    continue"""
-
-    level_match_block = """                        if (not is_unicode_fallback
+BLOCK_2_NEW = """                        if (not is_unicode_fallback
                                 and keysym is not None and not native_inject()
                                 and keysym not in self.MODIFIER_KEYSYMS
                                 and not (self.active_modifiers & self.ACTION_MODIFIER_KEYSYMS)):
@@ -236,19 +264,18 @@ CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
                                     self._route_key_as_text(keysym)
                                     continue"""
 
-    old_block_3 = """                        if keysym in self.MODIFIER_KEYSYMS:
+BLOCK_3_OLD = """                        if keysym in self.MODIFIER_KEYSYMS:
                             self.active_modifiers.add(keysym)
 
                         await self.send_x11_keypress(keysym, down=True)"""
-
-    new_block_3 = """                        if keysym in self.MODIFIER_KEYSYMS:
+BLOCK_3_NEW = """                        if keysym in self.MODIFIER_KEYSYMS:
                             self.active_modifiers.add(keysym)
 
                         await self.send_x11_keypress(keysym, down=True)
                         if keysym in self.ACTION_MODIFIER_KEYSYMS:
                             await asyncio.sleep(0.005)"""
 
-    old_wl_press_release = '''        lifted = self._held_conflicts(set(mods)) if neutralize else []
+WL_PRESS_RELEASE_OLD = '''        lifted = self._held_conflicts(set(mods)) if neutralize else []
         for m in lifted:
             self._inject(m, 0)
         synthed = []
@@ -280,8 +307,7 @@ CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
                 self._inject(m, 0)
             else:
                 self._mod_refs[m] = refs'''
-
-    new_wl_press_release = '''        lifted = self._held_conflicts(set(mods)) if neutralize else []
+WL_PRESS_RELEASE_NEW = '''        lifted = self._held_conflicts(set(mods)) if neutralize else []
         for m in lifted:
             self._inject(m, 0)
         if lifted:
@@ -330,14 +356,13 @@ CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
                 if should_restore and m not in self._down:
                     self._inject(m, 1)'''
 
-    old_owner_build = '''                def _build():
+OWNER_BUILD_OLD = '''                def _build():
                     text = self.wayland_input.get_xkb_keymap_string()
                     owner = _WaylandKeymapOwner(self.wayland_input, text)
                     if previous is not None:
                         owner.adopt_held(previous)
                     return owner'''
-
-    new_owner_build = '''                def _build():
+OWNER_BUILD_NEW = '''                def _build():
                     text = self.wayland_input.get_xkb_keymap_string()
                     owner = _WaylandKeymapOwner(self.wayland_input, text)
                     owner.active_modifiers = self.active_modifiers
@@ -345,14 +370,13 @@ CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
                         owner.adopt_held(previous)
                     return owner'''
 
-    old_owner_cached = '''        if self._wl_keymap_owner is not None and not self._wl_keymap_stale:
+OWNER_CACHED_OLD = '''        if self._wl_keymap_owner is not None and not self._wl_keymap_stale:
             return self._wl_keymap_owner'''
-
-    new_owner_cached = '''        if self._wl_keymap_owner is not None and not self._wl_keymap_stale:
+OWNER_CACHED_NEW = '''        if self._wl_keymap_owner is not None and not self._wl_keymap_stale:
             self._wl_keymap_owner.active_modifiers = self.active_modifiers
             return self._wl_keymap_owner'''
 
-    old_xtest = '''        xtest.fake_input(self._d, Xlib.X.KeyPress, kc)
+XTEST_OLD = '''        xtest.fake_input(self._d, Xlib.X.KeyPress, kc)
         self._pressed_kc[keysym] = kc
         for m in reversed(lifted):
             xtest.fake_input(self._d, Xlib.X.KeyPress, m)
@@ -372,8 +396,7 @@ CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
         xtest.fake_input(self._d, Xlib.X.KeyRelease, kc)
         for m in reversed(self._synth_mods.pop(keysym, ())):
             xtest.fake_input(self._d, Xlib.X.KeyRelease, m)'''
-
-    new_xtest = '''        if lifted:
+XTEST_NEW = '''        if lifted:
             if not hasattr(self, '_lifted_mods'):
                 self._lifted_mods = {}
             self._lifted_mods[keysym] = tuple(lifted)
@@ -398,74 +421,41 @@ CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
         for m in reversed(getattr(self, '_lifted_mods', {}).pop(keysym, ())):
             xtest.fake_input(self._d, Xlib.X.KeyPress, m)'''
 
-    for file_path in target_files:
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
 
-            changed = False
-            if '_restore_after_idle' not in content and inject_pattern.search(content):
-                content = inject_pattern.sub(new_inject_fn + '    async def _clear_injected_clipboard', content)
-                changed = True
+def _patch_input_handler(content, path):
+    content = replace_once(content, path, "clipboard state", INIT_OLD, INIT_NEW)
+    content = replace_once(content, path, "clipboard save", INJECT_SAVE_OLD, INJECT_SAVE_NEW)
+    content = replace_once(content, path, "clipboard restore", INJECT_RESTORE_OLD, INJECT_RESTORE_NEW)
+    content = replace_once(content, path, "clipboard restore task", RESTORE_FN_OLD, RESTORE_FN_NEW)
+    content = replace_once(content, path, "keyboard queue timeout", TIMEOUT_OLD, TIMEOUT_NEW)
 
-            if old_timeout in content:
-                content = content.replace(old_timeout, new_timeout)
-                changed = True
+    if "_build_cyrillic_qwerty_map" not in content:
+        idx = content.find("\nCYRILLIC_TO_QWERTY_KEYSYM = {")
+        if idx == -1:
+            warn(f"Cyrillic shortcuts: anchor not found in {path} (Selkies changed, patch needs updating)")
+        else:
+            end_idx = content.find("\n}", idx) + 2
+            content = content[:end_idx] + "\n" + CYRILLIC_BUILDER + content[end_idx:]
 
-            if "ctrl_keysym = 0xFFE3" in content and "_restore_after_idle" in content:
-                content = content.replace("ctrl_keysym = 0xFFE3", "ctrl_keysym = 0xFFE1").replace("v_keysym = 0x0076", "v_keysym = 0xFF63")
-                changed = True
+    content = replace_once(content, path, "unicode fallback with Ctrl", BLOCK_1_OLD, BLOCK_1_NEW)
+    content = replace_once(content, path, "keysym level match", BLOCK_2_OLD, BLOCK_2_NEW)
+    content = replace_once(content, path, "action modifier settle", BLOCK_3_OLD, BLOCK_3_NEW)
+    content = replace_once(content, path, "Wayland modifier neutralization", WL_PRESS_RELEASE_OLD, WL_PRESS_RELEASE_NEW)
+    content = replace_once(content, path, "keymap owner modifiers", OWNER_BUILD_OLD, OWNER_BUILD_NEW)
+    content = replace_once(content, path, "cached keymap owner modifiers", OWNER_CACHED_OLD, OWNER_CACHED_NEW)
+    content = replace_once(content, path, "XTest modifier neutralization", XTEST_OLD, XTEST_NEW)
+    return content
 
-            if "_build_cyrillic_qwerty_map" not in content and "CYRILLIC_TO_QWERTY_KEYSYM = {" in content:
-                idx = content.find("CYRILLIC_TO_QWERTY_KEYSYM = {")
-                end_idx = content.find("}", idx) + 1
-                content = content[:end_idx] + "\n" + cyr_builder + content[end_idx:]
-                changed = True
 
-            if "not (self.active_modifiers & self.ACTION_MODIFIER_KEYSYMS)" not in content and old_block_1 in content:
-                content = content.replace(old_block_1, new_block_1)
-                changed = True
+def patch_selkies_input():
+    targets = find_files("input_handler.py")
+    if not targets:
+        warn("input_handler.py not found")
+    for path in targets:
+        patch_file(path, _patch_input_handler, old_signatures=("_restore_after_idle",))
 
-            if clean_block_2 in content:
-                content = content.replace(clean_block_2, level_match_block)
-                changed = True
-            elif old_block_2 in content:
-                content = content.replace(old_block_2, level_match_block)
-                changed = True
 
-            if "await asyncio.sleep(0.02)" in content:
-                content = content.replace("await asyncio.sleep(0.02)", "await asyncio.sleep(0.005)")
-                changed = True
-            elif "await asyncio.sleep(0.015)" in content:
-                content = content.replace("await asyncio.sleep(0.015)", "await asyncio.sleep(0.005)")
-                changed = True
-            elif "await asyncio.sleep(0.005)" not in content and old_block_3 in content:
-                content = content.replace(old_block_3, new_block_3)
-                changed = True
-
-            if old_wl_press_release in content:
-                content = content.replace(old_wl_press_release, new_wl_press_release)
-                changed = True
-
-            if old_owner_build in content:
-                content = content.replace(old_owner_build, new_owner_build)
-                changed = True
-
-            if old_owner_cached in content:
-                content = content.replace(old_owner_cached, new_owner_cached)
-                changed = True
-
-            if old_xtest in content:
-                content = content.replace(old_xtest, new_xtest)
-                changed = True
-
-            if changed:
-                with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(content)
-                print(f"[selkies-patch-input] Applied input chord/timing fix to: {file_path}")
-        except Exception as e:
-            print(f"[selkies-patch-input] Warning: failed patching {file_path}: {e}", file=sys.stderr)
-
+def configure_konsole_paste():
     # Configure Konsole shortcut to paste on Ctrl+V in addition to standard terminal paste shortcuts
     konsole_xml = """<!DOCTYPE gui SYSTEM 'kpartgui.dtd'>
 <gui name="konsole" version="1">
@@ -504,53 +494,41 @@ CYRILLIC_TO_QWERTY_KEYSYM.update(_build_cyrillic_qwerty_map())
     except Exception:
         pass
 
-def patch_selkies_session():
-    patterns = [
-        "/opt/selkies/lib/python*/site-packages/selkies/session.py",
-        "/opt/selkies/lib64/python*/site-packages/selkies/session.py",
-        "/usr/lib/python*/site-packages/selkies/session.py",
-        "/usr/lib64/python*/site-packages/selkies/session.py",
-        "/usr/local/lib/python*/site-packages/selkies/session.py",
-    ]
 
-    target_files = []
-    for p in patterns:
-        target_files.extend(glob.glob(p))
+# --- Session launcher: restart after logout ----------------------------------
+# selkies-session only watches Selkies, so logging out of Plasma leaves an
+# empty stream. End the session when the desktop exits; systemd restarts it.
 
-    for file_path in target_files:
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
+SPAWN_OLD = '''        self.spawn(bus + shlex.split(entry["Exec"]), env=env)
+'''
+SPAWN_NEW = '''        self.desktop_proc = self.spawn(bus + shlex.split(entry["Exec"]), env=env)
+'''
 
-            changed = False
-
-            old_spawn = 'self.spawn(bus + shlex.split(entry["Exec"]), env=env)'
-            new_spawn = 'proc = self.spawn(bus + shlex.split(entry["Exec"]), env=env)\n        self.desktop_proc = proc\n        return proc'
-
-            if old_spawn in content and 'self.desktop_proc = ' not in content:
-                content = content.replace(old_spawn, new_spawn)
-                changed = True
-
-            old_loop = '''        while session.selkies.poll() is None and not stopping:
+LOOP_OLD = '''        while session.selkies.poll() is None and not stopping:
+            session.reap()
             time.sleep(0.5)'''
-
-            new_loop = '''        while session.selkies.poll() is None and not stopping:
-            dproc = getattr(session, "desktop_proc", None)
-            if dproc is not None and dproc.poll() is not None:
-                log(f"desktop session exited with code {dproc.returncode}; stopping session for auto-restart")
+LOOP_NEW = '''        while session.selkies.poll() is None and not stopping:
+            session.reap()
+            desktop_proc = getattr(session, "desktop_proc", None)
+            if desktop_proc is not None and desktop_proc.returncode is not None:
+                log(f"desktop exited with code {desktop_proc.returncode}; ending the session so it restarts")
                 break
             time.sleep(0.5)'''
 
-            if old_loop in content and 'dproc = ' not in content:
-                content = content.replace(old_loop, new_loop)
-                changed = True
 
-            if changed:
-                with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(content)
-                print(f"[selkies-patch-input] Applied session auto-restart on logout fix to: {file_path}")
-        except Exception as e:
-            print(f"[selkies-patch-input] Warning: failed patching session {file_path}: {e}", file=sys.stderr)
+def _patch_session(content, path):
+    content = replace_once(content, path, "desktop process", SPAWN_OLD, SPAWN_NEW)
+    content = replace_once(content, path, "restart after logout", LOOP_OLD, LOOP_NEW)
+    return content
+
+
+def patch_selkies_session():
+    targets = find_files("session.py")
+    if not targets:
+        warn("session.py not found")
+    for path in targets:
+        patch_file(path, _patch_session, old_signatures=("self.desktop_proc = proc",))
+
 
 def patch_kwin_settings():
     kwinrc_paths = [
@@ -580,6 +558,7 @@ def patch_kwin_settings():
 if __name__ == "__main__":
     patch_selkies_core_js()
     patch_selkies_input()
+    configure_konsole_paste()
     patch_selkies_session()
     patch_kwin_settings()
-
+    sys.exit(1 if problems else 0)
