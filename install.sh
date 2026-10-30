@@ -589,8 +589,12 @@ if [ "$STOCK_KWIN" = true ]; then
     echo "Using Fedora's own KWin (--stock-kwin)..."
     dnf versionlock delete "${KWIN_PKGS[@]}" 2>/dev/null || true
     mapfile -t installed_kwin < <(rpm -q --qf '%{NAME}\n' "${KWIN_PKGS[@]}" 2>/dev/null | grep -v 'not installed')
-    # Packaged files the layer overwrote fail their digest check
-    if [ "${#installed_kwin[@]}" -gt 0 ] && rpm -V "${installed_kwin[@]}" 2>/dev/null | grep -q '^..5'; then
+    # Packaged files the layer overwrote fail their digest check (rpm -V exits non-zero on any mismatch)
+    kwin_changes=""
+    if [ "${#installed_kwin[@]}" -gt 0 ]; then
+        kwin_changes=$(rpm -V "${installed_kwin[@]}" 2>/dev/null || true)
+    fi
+    if grep -q '^..5' <<< "$kwin_changes"; then
         echo "Removing the patched KWin files and restoring Fedora's..."
         # Files the layer added on top of the packages would still be picked up by ldconfig
         if layer_files=$(fetch_kwin_layer | tar -tzf - 2>/dev/null) && [ -n "$layer_files" ]; then
