@@ -149,7 +149,7 @@ case "$ARCH" in
 esac
 
 DISTRO="fedora"
-KWIN_LAYER="${LAYER_ARCH}-fedora44-kwin"
+KWIN_LAYER="${LAYER_ARCH}-fedora${VERSION_ID:-}-kwin"
 
 TARGET_BACKEND="Wayland (Native Zero-Copy)"
 if [ -z "$KWIN_LAYER" ]; then
@@ -585,61 +585,71 @@ fetch_kwin_layer() {
     curl -fsL -H "Authorization: Bearer $token" "https://ghcr.io/v2/linuxserver/selkies-layers/blobs/$digest"
 }
 
+# Put Fedora's files back where a layer overwrote them; $1 is that layer's tar.gz, or empty to fetch it
+restore_stock_kwin() {
+    local installed changes layer_tgz listing f
+    mapfile -t installed < <(rpm -q --qf '%{NAME}\n' "${KWIN_PKGS[@]}" 2>/dev/null | grep -v 'not installed')
+    [ "${#installed[@]}" -gt 0 ] || return 0
+    # Overwritten files fail their digest check (rpm -V exits non-zero on any mismatch)
+    changes=$(rpm -V "${installed[@]}" 2>/dev/null || true)
+    grep -q '^..5' <<< "$changes" || return 0
+    echo "Restoring Fedora's KWin files..."
+    layer_tgz="$1"
+    if [ -z "$layer_tgz" ]; then
+        layer_tgz=$(mktemp)
+        fetch_kwin_layer > "$layer_tgz" 2>/dev/null || true
+    fi
+    # Files a layer added on top of the packages would still be picked up by ldconfig
+    if listing=$(tar -tzf "$layer_tgz" 2>/dev/null) && [ -n "$listing" ]; then
+        while IFS= read -r f; do
+            f="/${f#./}"
+            case "$f" in /usr/*) ;; *) continue ;; esac
+            if { [ -f "$f" ] || [ -L "$f" ]; } && ! rpm -qf "$f" &>/dev/null; then
+                rm -f "$f"
+            fi
+        done <<< "$listing"
+    else
+        echo "Warning: could not list the patched KWin layer; files it added may remain."
+    fi
+    [ -n "$1" ] || rm -f "$layer_tgz"
+    dnf reinstall -y "${installed[@]}" || dnf distro-sync -y "${installed[@]}" || true
+    ldconfig 2>/dev/null || true
+}
+
+# KWin updates with Fedora like any package (older DahDesk versions pinned it). The patched
+# files only go over the exact KWin version they were built from; a plain `dnf update` that
+# brings a newer KWin puts Fedora's files back, and the next `selkies-update` re-patches.
+dnf versionlock delete "${KWIN_PKGS[@]}" 2>/dev/null || true
+
 if [ "$STOCK_KWIN" = true ]; then
     echo "Using Fedora's own KWin (--stock-kwin)..."
-    dnf versionlock delete "${KWIN_PKGS[@]}" 2>/dev/null || true
-    mapfile -t installed_kwin < <(rpm -q --qf '%{NAME}\n' "${KWIN_PKGS[@]}" 2>/dev/null | grep -v 'not installed')
-    # Packaged files the layer overwrote fail their digest check (rpm -V exits non-zero on any mismatch)
-    kwin_changes=""
-    if [ "${#installed_kwin[@]}" -gt 0 ]; then
-        kwin_changes=$(rpm -V "${installed_kwin[@]}" 2>/dev/null || true)
-    fi
-    if grep -q '^..5' <<< "$kwin_changes"; then
-        echo "Removing the patched KWin files and restoring Fedora's..."
-        # Files the layer added on top of the packages would still be picked up by ldconfig
-        if layer_files=$(fetch_kwin_layer | tar -tzf - 2>/dev/null) && [ -n "$layer_files" ]; then
-            while IFS= read -r f; do
-                f="/${f#./}"
-                case "$f" in /usr/*) ;; *) continue ;; esac
-                if { [ -f "$f" ] || [ -L "$f" ]; } && ! rpm -qf "$f" &>/dev/null; then
-                    rm -f "$f"
-                fi
-            done <<< "$layer_files"
-        else
-            echo "Warning: could not list the patched KWin layer; files it added may remain."
-        fi
-        dnf reinstall -y "${installed_kwin[@]}" || dnf distro-sync -y "${installed_kwin[@]}" || true
-        ldconfig 2>/dev/null || true
-    fi
-elif [ -n "$KWIN_LAYER" ]; then
-    echo "Applying KWin nested Wayland patch ($KWIN_LAYER)..."
-    if fetch_kwin_layer | tar -xzf - -C / usr/ 2>/dev/null; then
-        :
-    elif command -v podman &>/dev/null; then
-        CID=$(podman create "ghcr.io/linuxserver/selkies-layers:$KWIN_LAYER")
-        podman export "$CID" | tar -xf - -C / usr/
-        podman rm "$CID" >/dev/null
-    elif command -v docker &>/dev/null; then
-        CID=$(docker create "ghcr.io/linuxserver/selkies-layers:$KWIN_LAYER")
-        docker export "$CID" | tar -xf - -C / usr/
-        docker rm "$CID" >/dev/null
-    else
-        echo "Warning: could not download the patched KWin layer; KWin stays as it is."
-    fi
-
-    # Update library cache and ensure libkwin symlink points to patched binary
-    for kwin_dir in /usr/lib64 /usr/lib; do
-        if [ -d "$kwin_dir" ]; then
-            latest_kwin=$(find "$kwin_dir" -maxdepth 1 -name "libkwin.so.6.*" 2>/dev/null | sort -V | tail -n 1 || true)
-            if [ -n "$latest_kwin" ] && [ -f "$latest_kwin" ]; then
-                ln -sf "$(basename "$latest_kwin")" "${kwin_dir}/libkwin.so.6" 2>/dev/null || true
-            fi
-        fi
-    done
-    ldconfig 2>/dev/null || true
-    dnf versionlock add "${KWIN_PKGS[@]}" 2>/dev/null || true
+    restore_stock_kwin ""
+    KWIN_SUMMARY="Fedora (stock, experimental)"
 else
-    echo "No Wayland KWin patch available for $DISTRO. Using X11 backend."
+    KWIN_LAYER_TGZ=$(mktemp)
+    KWIN_INSTALLED_VERSION=$(rpm -q --qf '%{VERSION}' kwin-libs 2>/dev/null || true)
+    KWIN_LAYER_VERSION=""
+    if fetch_kwin_layer > "$KWIN_LAYER_TGZ" 2>/dev/null && KWIN_LAYER_LIST=$(tar -tzf "$KWIN_LAYER_TGZ" 2>/dev/null); then
+        KWIN_LAYER_LIB=$(grep -o 'libkwin\.so\.6\.[0-9.]*$' <<< "$KWIN_LAYER_LIST" || true)
+        KWIN_LAYER_VERSION="${KWIN_LAYER_LIB#libkwin.so.}"
+    fi
+    if [ -z "$KWIN_LAYER_VERSION" ]; then
+        echo "Warning: no patched KWin found for this release ($KWIN_LAYER). KWin stays as it is;"
+        echo "         a second browser display needs the patch."
+        KWIN_SUMMARY="unchanged (no patched build for this release)"
+    elif [ "$KWIN_LAYER_VERSION" = "$KWIN_INSTALLED_VERSION" ]; then
+        echo "Applying KWin nested Wayland patch ($KWIN_LAYER, KWin ${KWIN_INSTALLED_VERSION})..."
+        tar -xzf "$KWIN_LAYER_TGZ" -C / usr/
+        ldconfig 2>/dev/null || true
+        KWIN_SUMMARY="linuxserver patched (${KWIN_INSTALLED_VERSION})"
+    else
+        echo "Warning: the patched KWin is built for ${KWIN_LAYER_VERSION}, but KWin ${KWIN_INSTALLED_VERSION} is installed."
+        echo "         Using Fedora's KWin until they match (sudo selkies-update re-checks);"
+        echo "         a second browser display needs the patch."
+        restore_stock_kwin "$KWIN_LAYER_TGZ"
+        KWIN_SUMMARY="Fedora (patched build is for ${KWIN_LAYER_VERSION}; run selkies-update later)"
+    fi
+    rm -f "$KWIN_LAYER_TGZ"
 fi
 
 setcap -r /usr/bin/kwin_wayland 2>/dev/null || setcap -r /usr/sbin/kwin_wayland 2>/dev/null || true
@@ -1603,7 +1613,7 @@ echo "  DahDesk Installation Complete!"
 echo "=================================================="
 echo "Profile:      ${PROFILE}"
 echo "Backend:      ${INITIAL_BACKEND}"
-echo "KWin:         $([ "$STOCK_KWIN" = true ] && echo "Fedora (stock, experimental)" || echo "linuxserver patched")"
+echo "KWin:         ${KWIN_SUMMARY}"
 echo "Hardware GPU: $([ "$GPU_ENABLED" = true ] && echo "Active (${DETECTED_GPU})" || echo "None / Software rendering")"
 echo "Web URL:      https://<server-ip>:${PORT}/"
 echo "Desktop User: ${DESKTOP_USER}"
