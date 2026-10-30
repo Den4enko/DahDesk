@@ -102,6 +102,7 @@ Everything in Essential, plus the complete official KDE Spin group:
 | **Auth** | None — direct stream access (no login dialog) |
 | **Desktop user** | Chosen during setup or via `--user` flag |
 | **SSH** | Port `22` |
+| **Stream defaults** | H.265, 30 FPS, Turbo off, still-screen enhancement on (remote-desktop tuning; change in the side panel) |
 
 ---
 
