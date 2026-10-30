@@ -18,7 +18,7 @@ DahDesk is an opinionated installer that wires these upstream projects together 
 4. **Creates a systemd user service** (`selkies.service`) that starts the desktop and streaming stack automatically on boot.
 5. **Installs native package-manager hooks** so every normal system update automatically maintains required KWin capabilities, device permissions, and the Selkies input patch (local only — nothing is downloaded):
    - **Fedora:** DNF5 Actions Plugin (`/etc/dnf/libdnf5-plugins/actions.d/selkies-sync.actions`)
-6. **Locks critical packages** (`kwin`, `kwin-libs`, `selkies`) against unintended upstream upgrades that could break streaming.
+6. **Locks `selkies`** against unintended upgrades. KWin updates with Fedora; the patched KWin files are applied only over the exact KWin version they were built for. After a `dnf update` brings a newer KWin, Fedora's own KWin runs (everything but a second browser display works) until `sudo selkies-update` finds a matching patched build.
 
 Once installed, just update your system normally — DahDesk keeps itself consistent automatically. DahDesk itself is only updated when you run `sudo selkies-update`.
 
